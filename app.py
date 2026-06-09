@@ -221,7 +221,7 @@ st.title("🏡 Property Hub Tracker Workspace")
 tab_scraped, tab_map_view = st.tabs(["📊 Parser & Evaluator", "🗺️ Portfolio Map Explorer"])
 
 # =========================================================================
-# PAGE WORKSPACE 1: PARSER & EVALUATOR (No changes here, keeping it objective)
+# PAGE WORKSPACE 1: PARSER & EVALUATOR
 # =========================================================================
 with tab_scraped:
     col1, col2 = st.columns([1, 1])
@@ -384,7 +384,9 @@ with tab_map_view:
 
     # --- GLOBAL FILTERS INTERFACE PANEL ---
     st.markdown("### 🔍 Live Portfolio Filter Console")
-    filter_col1, filter_col2, filter_col3 = st.columns([1.5, 1.5, 2])
+    
+    # Adjusted column distributions to layout 4 elements side-by-side cleanly
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1.2, 1.2, 1.3, 1.3])
     
     df_filtered = pd.DataFrame()
     
@@ -398,7 +400,6 @@ with tab_map_view:
         )
         df_current["Total Cost"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
         
-        # Safe fallback logic if the column isn't inside the DB engine table structure yet
         if "ranking" not in df_current.columns:
             df_current["ranking"] = 0
         else:
@@ -422,7 +423,7 @@ with tab_map_view:
                 df_filtered = pd.DataFrame(columns=df_current.columns)
                 
         with filter_col2:
-            text_search = st.text_input("Filter by Text Match (Title / Address / Notes):", placeholder="e.g. Krzyki or Popowicka")
+            text_search = st.text_input("Filter by Text Match:", placeholder="e.g. Krzyki or Popowicka")
             if text_search and not df_filtered.empty:
                 search_lower = text_search.lower()
                 df_filtered = df_filtered[
@@ -438,7 +439,7 @@ with tab_map_view:
                 max_p += 10000.0
             
             budget_range = st.slider(
-                "Filter by Total Budget Outlay Range (zł):",
+                "Filter by Total Budget (zł):",
                 min_value=0.0,
                 max_value=max_p,
                 value=(0.0, max_p),
@@ -447,6 +448,25 @@ with tab_map_view:
             )
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
+
+        with filter_col4:
+            # --- NEW INTERACTIVE RANKING FILTER SLIDER ---
+            min_r = int(df_current["ranking"].min()) if not df_current.empty else 0
+            max_r = int(df_current["ranking"].max()) if not df_current.empty else 100
+            
+            # Ensure the slider has a valid step configuration range if all items are default (0)
+            if min_r == max_r:
+                max_r = max(min_r + 10, 10)
+                
+            ranking_range = st.slider(
+                "Filter by Ranking Range:",
+                min_value=0,
+                max_value=max_r,
+                value=(0, max_r),
+                step=1
+            )
+            if not df_filtered.empty:
+                df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
 
     # --- DYNAMIC SYNCHRONIZED MAP ENGINE ---
     wroclaw_center_view = [51.1079, 17.0385]
@@ -512,9 +532,7 @@ with tab_map_view:
                 selected_row = df_current[df_current["title"] == selected_title].iloc[0]
                 
                 with st.expander(f"Modifier Panel: {selected_title[:30]}...", expanded=True):
-                    # PORTFOLIO-ONLY EXCLUSIVE EDITABLE FIELD: RANKING
                     edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)), step=1)
-                    
                     edit_status = st.selectbox("Status:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(selected_row["status"]))
                     edit_price = st.number_input("Base Price (zł):", min_value=0.0, value=float(selected_row["price"]), step=5000.0)
                     edit_floor = st.text_input("Floor number:", value=str(selected_row.get("floor", "")))
@@ -547,7 +565,6 @@ with tab_map_view:
         with grid_layout:
             st.markdown("### 📊 Active Filtered Records Index")
             
-            # Inserted "ranking" field right into the structured column configuration list
             ordered_columns = [
                 "id", "ranking", "title", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
             ]
@@ -560,13 +577,13 @@ with tab_map_view:
                     else:
                         df_display_source[col] = ""
                     
+            # Default sorting rank index to show highest priorities first
             df_display = df_display_source[ordered_columns].copy().sort_values(by="ranking", ascending=False)
 
             edited_df = st.data_editor(
                 df_display,
                 column_config={
                     "id": None, 
-                    # Enabled ranking column validation layout details
                     "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1, disabled=False),
                     "title": st.column_config.TextColumn("Title", disabled=True),
                     "address": st.column_config.TextColumn("Address", disabled=True),
