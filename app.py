@@ -25,7 +25,8 @@ class PropertyDetails(BaseModel):
     price: str = Field(description="The listed price string, e.g., '850 000 zł' or '750000'")
     area: str = Field(description="The total area/surface size of the property in square meters (m²)")
     rooms: str = Field(description="The number of rooms in the property")
-    floor: str = Field(description="The floor level of the property, e.g., '1st floor', 'Ground floor', 'Top floor'")
+    floor: str = Field(description="The specific floor level of the property, e.g., '1st floor', 'Ground floor', 'Top floor', '3'")
+    floors: str = Field(description="The total number of floors/stories present in the entire building block, e.g., '4', '10'")
     year_built: str = Field(description="The year the building/property was constructed. Use 'Unknown' if missing.")
     description: str = Field(description="A brief summary of key features or selling points from the listing text.")
 
@@ -109,9 +110,6 @@ def intelligent_scraper(url: str):
         You are an expert real estate data engineer. Carefully read the text below, which contains 
         structured element tags extracted from a property listing. 
         Analyze the key parameters and fill out the required schema details flawlessly.
-        
-        Look closely for an explicit location text snippet or a '[Header Location Container]' value 
-        to extract the cleanest available geographical hierarchy.
         
         Extracted Elements & Content:
         {clean_text}
@@ -213,7 +211,7 @@ def get_coordinates(address_string: str):
         
     return None, None
 
-# --- PIPELINE STATUS OPTIONS CONFIGURATION ---
+# --- CONSTANT PIPELINE CONFIGURATION ---
 STATUS_OPTIONS = ["Interested", "Viewing Arranged", "Offer Submitted", "No Longer Available", "No Longer Interested", "Archived"]
 
 # --- STREAMLIT PAGE SETUP ---
@@ -223,7 +221,7 @@ st.title("🏡 Property Hub Tracker Workspace")
 tab_scraped, tab_map_view = st.tabs(["📊 Parser & Evaluator", "🗺️ Portfolio Map Explorer"])
 
 # =========================================================================
-# PAGE WORKSPACE 1: PARSER & EVALUATOR
+# PAGE WORKSPACE 1: PARSER & EVALUATOR (No changes here, keeping it objective)
 # =========================================================================
 with tab_scraped:
     col1, col2 = st.columns([1, 1])
@@ -249,6 +247,7 @@ with tab_scraped:
                             "area": extracted.area,
                             "rooms": extracted.rooms,
                             "floor": extracted.floor,
+                            "floors": extracted.floors,
                             "year_built": extracted.year_built,
                             "description": extracted.description,
                             "latitude": lat,
@@ -291,7 +290,7 @@ with tab_scraped:
             else:
                 st.error("❌ Geocoding Failed! Try cleaning up the text block to just: 'ul. Popowicka, Wrocław'")
             
-            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+            metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
             with metric_col1:
                 st.text_input("Area (m²):", value=cache["area"], disabled=True, key="field_area")
             with metric_col2:
@@ -299,6 +298,8 @@ with tab_scraped:
             with metric_col3:
                 st.text_input("Floor:", value=cache["floor"], disabled=True, key="field_floor")
             with metric_col4:
+                st.text_input("Total Floors:", value=cache.get("floors", "Unknown"), disabled=True, key="field_floors")
+            with metric_col5:
                 st.text_input("Year Built:", value=cache["year_built"], disabled=True, key="field_year")
             
             st.markdown("### 💰 Additional Transaction Outlays (Numeric Polish Złoty)")
@@ -312,7 +313,6 @@ with tab_scraped:
             user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.", key="field_notes")
             user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating")
             
-            # Status dropdown supporting the full array configuration options
             current_status = st.selectbox("Pipeline Track Status:", STATUS_OPTIONS, key="field_status")
             
             if st.button("Commit This Record Version to Database", key="btn_commit_db"):
@@ -340,6 +340,7 @@ with tab_scraped:
                         "area": cache["area"],
                         "rooms": cache["rooms"],
                         "floor": cache["floor"],
+                        "floors": cache.get("floors", "Unknown"),
                         "year_built": cache["year_built"],
                         "garage_cost": garage_input,
                         "storage_cost": storage_input,
@@ -362,13 +363,12 @@ with tab_scraped:
 
     with col2:
         st.subheader("Saved Property Records Overview")
-        st.info("💡 Go to the 'Portfolio Map Explorer' tab to view the live dashboard complete with active map filters and cross-tab synchronizations!")
+        st.info("💡 Go to the 'Portfolio Map Explorer' tab to apply real-time filtering, cross-examine properties on the map, and edit track details!")
 
 # =========================================================================
-# PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER (THE CONTROL CONSOLE)
+# PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER (THE MASTER CONTROL CENTER)
 # =========================================================================
 with tab_map_view:
-    # 1. Fetch live data records from DB
     try:
         db_query_map = supabase.table("properties").select("*").execute()
         map_properties = db_query_map.data
@@ -382,14 +382,13 @@ with tab_map_view:
         if "is_current" in df_all.columns:
             df_current = df_all[df_all["is_current"] == True].copy()
 
-    # --- 2. THE FILTER CONSOLE BAR ---
+    # --- GLOBAL FILTERS INTERFACE PANEL ---
     st.markdown("### 🔍 Live Portfolio Filter Console")
     filter_col1, filter_col2, filter_col3 = st.columns([1.5, 1.5, 2])
     
     df_filtered = pd.DataFrame()
     
     if not df_current.empty:
-        # Guarantee all columns exist and normalize values cleanly
         df_current["price"] = pd.to_numeric(df_current["price"], errors='coerce').fillna(0.0)
         df_current["garage_cost"] = pd.to_numeric(df_current["garage_cost"], errors='coerce').fillna(0.0)
         df_current["storage_cost"] = pd.to_numeric(df_current["storage_cost"], errors='coerce').fillna(0.0)
@@ -399,27 +398,32 @@ with tab_map_view:
         )
         df_current["Total Cost"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
         
-        # Fallback security injection for missing database properties fields
-        for field in ["id", "title", "address", "status", "my_notes", "area"]:
-            if field not in df_current.columns:
-                df_current[field] = ""
-                
+        # Safe fallback logic if the column isn't inside the DB engine table structure yet
+        if "ranking" not in df_current.columns:
+            df_current["ranking"] = 0
+        else:
+            df_current["ranking"] = pd.to_numeric(df_current["ranking"], errors='coerce').fillna(0).astype(int)
+
+        df_current["title"] = df_current["title"].astype(str).fillna("")
+        df_current["address"] = df_current["address"].astype(str).fillna("")
+        df_current["my_notes"] = df_current["my_notes"].astype(str).fillna("")
+        
         df_filtered = df_current.copy()
 
         with filter_col1:
-            # Active Multi-Select Pipeline Status Filter
             status_filter = st.multiselect(
                 "Filter by Pipeline Status:",
                 options=STATUS_OPTIONS,
-                default=STATUS_OPTIONS # Show all by default
+                default=STATUS_OPTIONS
             )
             if status_filter:
                 df_filtered = df_filtered[df_filtered["status"].isin(status_filter)]
+            else:
+                df_filtered = pd.DataFrame(columns=df_current.columns)
                 
         with filter_col2:
-            # Text queries regex matcher
             text_search = st.text_input("Filter by Text Match (Title / Address / Notes):", placeholder="e.g. Krzyki or Popowicka")
-            if text_search:
+            if text_search and not df_filtered.empty:
                 search_lower = text_search.lower()
                 df_filtered = df_filtered[
                     df_filtered["title"].str.lower().str.contains(search_lower) | 
@@ -428,10 +432,10 @@ with tab_map_view:
                 ]
 
         with filter_col3:
-            # Safe boundary range calculations
+            min_p = float(df_current["Total Cost"].min()) if not df_current.empty else 0.0
             max_p = float(df_current["Total Cost"].max()) if not df_current.empty else 1500000.0
-            if max_p <= 0.0:
-                max_p = 1500000.0
+            if min_p == max_p:
+                max_p += 10000.0
             
             budget_range = st.slider(
                 "Filter by Total Budget Outlay Range (zł):",
@@ -441,15 +445,15 @@ with tab_map_view:
                 step=10000.0,
                 format="%d zł"
             )
-            df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
+            if not df_filtered.empty:
+                df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
 
-    # --- 3. SYNCHRONIZED RE-RENDERING MAP GENERATOR ---
+    # --- DYNAMIC SYNCHRONIZED MAP ENGINE ---
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
     marker_group = folium.FeatureGroup(name="Properties")
     saved_pins_count = 0
     
-    # Render map objects exclusively from the filtered dataset scope!
     if not df_filtered.empty and "latitude" in df_filtered.columns and "longitude" in df_filtered.columns:
         df_pins = df_filtered.dropna(subset=['latitude', 'longitude'])
         for _, row in df_pins.iterrows():
@@ -458,10 +462,13 @@ with tab_map_view:
                 lon_coord = float(row['longitude'])
                 
                 html_popup_markup = f"""
-                <div style='font-family: Arial, sans-serif; min-width: 240px;'>
+                <div style='font-family: Arial, sans-serif; min-width: 250px;'>
                     <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
+                    <b>⭐ Ranking:</b> {int(row.get('ranking', 0))}<br>
                     <b>📍 Address:</b> {row['address']}<br>
                     <b>📐 Area Size:</b> {row['area']}<br>
+                    <b>🏢 Structural Level:</b> Floor {row.get('floor', 'N/A')} of {row.get('floors', 'N/A')}<br>
+                    <b>🧱 Year Built:</b> {row.get('year_built', 'N/A')}<br>
                     <b>💰 Base Price:</b> {row['price']:,.2f} zł<br>
                     <b>📉 Cost per m²:</b> {row['Cost per m²']:,.2f} zł/m²<br>
                     <b>🚗 Garage Cost:</b> {row['garage_cost']:,.2f} zł<br>
@@ -472,8 +479,6 @@ with tab_map_view:
                     <b>📝 My Notes:</b> <i>{row['my_notes']}</i>
                 </div>
                 """
-                
-                # Visual logic mapping out marker flags colors
                 marker_color = "blue"
                 if row['status'] in ["No Longer Available", "No Longer Interested"]:
                     marker_color = "gray"
@@ -491,36 +496,42 @@ with tab_map_view:
 
     marker_group.add_to(folium_explorer_map)
     st_folium(folium_explorer_map, use_container_width=True, height=450, key=f"map_workbench_pins_{saved_pins_count}")
-    st.caption(f"📍 Showing **{saved_pins_count}** active property markers matching current filter selections.")
+    st.caption(f"📍 Map outputting **{saved_pins_count}** filtered investment markers matching the console matrix values.")
 
-    # --- 4. DATA EDITORS & SIDE QUICK MODIFY PANEL ---
+    # --- WORKBENCH LAYOUT DATA TABLES & MODIFIER PANELS ---
     if not df_current.empty:
         st.markdown("---")
         edit_layout, grid_layout = st.columns([1, 2])
         
         with edit_layout:
             st.markdown("### ✏️ Quick Pop-Up Editor")
-            # Dropdown menu updates based on what survived the console filtration checks
-            edit_target_options = df_filtered["title"].unique() if not df_filtered.empty else ["No matching records"]
+            edit_target_options = df_filtered["title"].unique() if not df_filtered.empty else df_current["title"].unique()
             selected_title = st.selectbox("Select a Property to Edit Inline:", options=edit_target_options, key="map_editor_picker")
             
-            if selected_title and selected_title != "No matching records":
+            if selected_title:
                 selected_row = df_current[df_current["title"] == selected_title].iloc[0]
                 
                 with st.expander(f"Modifier Panel: {selected_title[:30]}...", expanded=True):
-                    # Fixed indexing check to guarantee match safety inside STATUS_OPTIONS array bounds
-                    current_status_val = selected_row["status"] if selected_row["status"] in STATUS_OPTIONS else STATUS_OPTIONS[0]
+                    # PORTFOLIO-ONLY EXCLUSIVE EDITABLE FIELD: RANKING
+                    edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)), step=1)
                     
-                    edit_status = st.selectbox("Status:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current_status_val))
+                    edit_status = st.selectbox("Status:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(selected_row["status"]))
                     edit_price = st.number_input("Base Price (zł):", min_value=0.0, value=float(selected_row["price"]), step=5000.0)
+                    edit_floor = st.text_input("Floor number:", value=str(selected_row.get("floor", "")))
+                    edit_floors = st.text_input("Total building floors:", value=str(selected_row.get("floors", "")))
+                    edit_year = st.text_input("Year Built:", value=str(selected_row.get("year_built", "")))
                     edit_garage = st.number_input("Garage Cost (zł):", min_value=0.0, value=float(selected_row["garage_cost"]), step=1000.0)
                     edit_storage = st.number_input("Storage Cost (zł):", min_value=0.0, value=float(selected_row["storage_cost"]), step=500.0)
                     edit_notes = st.text_area("My Notes:", value=str(selected_row["my_notes"]))
                     
                     if st.button("Save Changes Directly to Record", key="btn_save_inline_map"):
                         update_payload = {
+                            "ranking": edit_ranking,
                             "status": edit_status,
                             "price": edit_price,
+                            "floor": edit_floor,
+                            "floors": edit_floors,
+                            "year_built": edit_year,
                             "garage_cost": edit_garage,
                             "storage_cost": edit_storage,
                             "my_notes": edit_notes
@@ -528,7 +539,7 @@ with tab_map_view:
                         try:
                             supabase.table("properties").update(update_payload).eq("id", selected_row["id"]).execute()
                             st.success("Record updated successfully!")
-                            time.sleep(0.5)
+                            time.sleep(1)
                             st.rerun()
                         except Exception as update_err:
                             st.error(f"Failed to push updates: {update_err}")
@@ -536,20 +547,33 @@ with tab_map_view:
         with grid_layout:
             st.markdown("### 📊 Active Filtered Records Index")
             
+            # Inserted "ranking" field right into the structured column configuration list
             ordered_columns = [
-                "id", "title", "address", "area", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
+                "id", "ranking", "title", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
             ]
             
-            df_display = df_filtered[ordered_columns].copy().sort_values(by="title", ascending=True)
+            df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
+            for col in ordered_columns:
+                if col not in df_display_source.columns:
+                    if col == "ranking":
+                        df_display_source[col] = 0
+                    else:
+                        df_display_source[col] = ""
+                    
+            df_display = df_display_source[ordered_columns].copy().sort_values(by="ranking", ascending=False)
 
-            # RENDER SYNCHRONIZED INTERACTIVE DATA GRIDS PANEL
-            edited_table = st.data_editor(
+            edited_df = st.data_editor(
                 df_display,
                 column_config={
-                    "id": None, # Kept hidden completely
+                    "id": None, 
+                    # Enabled ranking column validation layout details
+                    "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1, disabled=False),
                     "title": st.column_config.TextColumn("Title", disabled=True),
                     "address": st.column_config.TextColumn("Address", disabled=True),
                     "area": st.column_config.TextColumn("Area", disabled=True),
+                    "floor": st.column_config.TextColumn("Floor", disabled=False),
+                    "floors": st.column_config.TextColumn("Total Floors", disabled=False),
+                    "year_built": st.column_config.TextColumn("Year Built", disabled=False),
                     "status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS, disabled=False),
                     "price": st.column_config.NumberColumn("Base Price", format="%.2f zł", disabled=False),
                     "Cost per m²": st.column_config.NumberColumn("Cost per m²", format="%.2f zł", disabled=True),
@@ -563,14 +587,17 @@ with tab_map_view:
                 key="map_tab_aligned_data_grid"
             )
 
-            # Dynamic cell modification monitoring backends
             if st.session_state.get("map_tab_aligned_data_grid") and st.session_state["map_tab_aligned_data_grid"]["edited_rows"]:
                 changes_detected = st.session_state["map_tab_aligned_data_grid"]["edited_rows"]
+                
                 for row_idx_str, updated_fields in changes_detected.items():
                     row_idx = int(row_idx_str)
                     record_id = df_display.iloc[row_idx]["id"]
+                    
                     try:
-                        supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
-                    except Exception as cell_err:
-                        st.error(f"Failed to synchronize table changes: {cell_err}")
+                        if record_id:
+                            supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
+                    except Exception as e:
+                        st.error(f"Failed to synchronize table changes: {e}")
+                
                 st.rerun()
