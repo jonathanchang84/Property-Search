@@ -115,7 +115,8 @@ def intelligent_scraper(url: str):
         {clean_text}
         """
         
-        models_to_try = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+        # Swapped array priority order to pull standard high-limit production flashes first, mitigating 429 locks
+        models_to_try = ['gemini-1.5-flash', 'gemini-2.5-flash']
         ai_response = None
         
         for model_name in models_to_try:
@@ -131,10 +132,15 @@ def intelligent_scraper(url: str):
                 )
                 break
             except Exception as model_error:
-                if model_name == 'gemini-2.5-flash':
-                    st.warning("Gemini 2.5 Flash is busy. Rerouting to backup processing channels...")
-                    time.sleep(1) 
-                    continue
+                error_str = str(model_error)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    if model_name == 'gemini-1.5-flash':
+                        st.warning("Primary production tier baseline exhausted. Moving to secondary pipeline variant...")
+                        time.sleep(1)
+                        continue
+                    else:
+                        st.error("⚠️ Gemini API Daily Quota Exhausted completely across all operational free tier tracking models.")
+                        return None
                 else:
                     raise model_error
                     
@@ -385,9 +391,7 @@ with tab_map_view:
     # --- GLOBAL FILTERS INTERFACE PANEL ---
     st.markdown("### 🔍 Live Portfolio Filter Console")
     
-    # Adjusted column distributions to layout 4 elements side-by-side cleanly
-    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1.2, 1.2, 1.3, 1.3])
-    
+    filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns([1.0, 1.0, 1.2, 1.1, 1.1])
     df_filtered = pd.DataFrame()
     
     if not df_current.empty:
@@ -399,6 +403,8 @@ with tab_map_view:
             lambda r: r["price"] / r["numeric_area"] if r["numeric_area"] > 0 else 0.0, axis=1
         )
         df_current["Total Cost"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
+        
+        df_current["rating"] = pd.to_numeric(df_current.get("rating", 5), errors='coerce').fillna(5).astype(int)
         
         if "ranking" not in df_current.columns:
             df_current["ranking"] = 0
@@ -412,11 +418,7 @@ with tab_map_view:
         df_filtered = df_current.copy()
 
         with filter_col1:
-            status_filter = st.multiselect(
-                "Filter by Pipeline Status:",
-                options=STATUS_OPTIONS,
-                default=STATUS_OPTIONS
-            )
+            status_filter = st.multiselect("Filter by Status:", options=STATUS_OPTIONS, default=STATUS_OPTIONS)
             if status_filter:
                 df_filtered = df_filtered[df_filtered["status"].isin(status_filter)]
             else:
@@ -439,7 +441,7 @@ with tab_map_view:
                 max_p += 10000.0
             
             budget_range = st.slider(
-                "Filter by Total Budget (zł):",
+                "Filter by Budget (zł):",
                 min_value=0.0,
                 max_value=max_p,
                 value=(0.0, max_p),
@@ -450,23 +452,20 @@ with tab_map_view:
                 df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
 
         with filter_col4:
-            # --- NEW INTERACTIVE RANKING FILTER SLIDER ---
             min_r = int(df_current["ranking"].min()) if not df_current.empty else 0
             max_r = int(df_current["ranking"].max()) if not df_current.empty else 100
-            
-            # Ensure the slider has a valid step configuration range if all items are default (0)
             if min_r == max_r:
                 max_r = max(min_r + 10, 10)
                 
-            ranking_range = st.slider(
-                "Filter by Ranking Range:",
-                min_value=0,
-                max_value=max_r,
-                value=(0, max_r),
-                step=1
-            )
+            ranking_range = st.slider("Filter by Ranking:", min_value=0, max_value=max_r, value=(0, max_r), step=1)
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
+
+        with filter_col5:
+            # --- INTERACTIVE RATING SLIDER ---
+            rating_range = st.slider("Filter by Rating (1-10):", min_value=1, max_value=10, value=(1, 10), step=1)
+            if not df_filtered.empty:
+                df_filtered = df_filtered[(df_filtered["rating"] >= rating_range[0]) & (df_filtered["rating"] <= rating_range[1])]
 
     # --- DYNAMIC SYNCHRONIZED MAP ENGINE ---
     wroclaw_center_view = [51.1079, 17.0385]
@@ -485,6 +484,7 @@ with tab_map_view:
                 <div style='font-family: Arial, sans-serif; min-width: 250px;'>
                     <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
                     <b>⭐ Ranking:</b> {int(row.get('ranking', 0))}<br>
+                    <b>📊 Rating:</b> {int(row.get('rating', 5))}/10<br>
                     <b>📍 Address:</b> {row['address']}<br>
                     <b>📐 Area Size:</b> {row['area']}<br>
                     <b>🏢 Structural Level:</b> Floor {row.get('floor', 'N/A')} of {row.get('floors', 'N/A')}<br>
@@ -516,7 +516,7 @@ with tab_map_view:
 
     marker_group.add_to(folium_explorer_map)
     st_folium(folium_explorer_map, use_container_width=True, height=450, key=f"map_workbench_pins_{saved_pins_count}")
-    st.caption(f"📍 Map outputting **{saved_pins_count}** filtered investment markers matching the console matrix values.")
+    st.caption(f"📍 Map outputting **{saved_pins_count}** filtered investment markers.")
 
     # --- WORKBENCH LAYOUT DATA TABLES & MODIFIER PANELS ---
     if not df_current.empty:
@@ -533,6 +533,7 @@ with tab_map_view:
                 
                 with st.expander(f"Modifier Panel: {selected_title[:30]}...", expanded=True):
                     edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)), step=1)
+                    edit_rating = st.slider("Property Rating Metric (1-10):", min_value=1, max_value=10, value=int(selected_row.get("rating", 5)), step=1)
                     edit_status = st.selectbox("Status:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(selected_row["status"]))
                     edit_price = st.number_input("Base Price (zł):", min_value=0.0, value=float(selected_row["price"]), step=5000.0)
                     edit_floor = st.text_input("Floor number:", value=str(selected_row.get("floor", "")))
@@ -545,6 +546,7 @@ with tab_map_view:
                     if st.button("Save Changes Directly to Record", key="btn_save_inline_map"):
                         update_payload = {
                             "ranking": edit_ranking,
+                            "rating": edit_rating,
                             "status": edit_status,
                             "price": edit_price,
                             "floor": edit_floor,
@@ -566,7 +568,7 @@ with tab_map_view:
             st.markdown("### 📊 Active Filtered Records Index")
             
             ordered_columns = [
-                "id", "ranking", "title", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
+                "id", "ranking", "rating", "title", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
             ]
             
             df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
@@ -574,17 +576,19 @@ with tab_map_view:
                 if col not in df_display_source.columns:
                     if col == "ranking":
                         df_display_source[col] = 0
+                    elif col == "rating":
+                        df_display_source[col] = 5
                     else:
                         df_display_source[col] = ""
                     
-            # Default sorting rank index to show highest priorities first
-            df_display = df_display_source[ordered_columns].copy().sort_values(by="ranking", ascending=False)
+            df_display = df_display_source[ordered_columns].copy().sort_values(by=["ranking", "rating"], ascending=[False, False])
 
             edited_df = st.data_editor(
                 df_display,
                 column_config={
                     "id": None, 
                     "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1, disabled=False),
+                    "rating": st.column_config.NumberColumn("Rating", min_value=1, max_value=10, step=1, disabled=False),
                     "title": st.column_config.TextColumn("Title", disabled=True),
                     "address": st.column_config.TextColumn("Address", disabled=True),
                     "area": st.column_config.TextColumn("Area", disabled=True),
