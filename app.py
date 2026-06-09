@@ -565,9 +565,12 @@ with tab_map_view:
                 lat_coord = float(row['latitude'])
                 lon_coord = float(row['longitude'])
                 
+                # ENHANCED: Transformed title into an interactive clickable anchor link targeting tab context
                 html_popup_markup = f"""
                 <div style='font-family: Arial, sans-serif; min-width: 250px;'>
-                    <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
+                    <h4 style='margin:0 0 5px 0;'>
+                        <a href="{row['url']}" target="_blank" style="color:#1f77b4; text-decoration:none; font-weight:bold;">🔗 {row['title']}</a>
+                    </h4>
                     <b>⭐ Ranking:</b> {int(row.get('ranking', 0))}<br>
                     <b>📊 Rating:</b> {int(row.get('rating', 5))}/10<br>
                     <b>📍 Address:</b> {row['address']}<br>
@@ -628,11 +631,12 @@ with tab_map_view:
 
         with grid_layout:
             st.markdown("### 📊 Active Filtered Records Index")
-            ordered_columns = ["id", "ranking", "rating", "title", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"]
+            # ENHANCED: Included "url" directly inside the structural ordered pipeline frame grid arrays
+            ordered_columns = ["id", "ranking", "rating", "title", "url", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"]
             df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
             df_display = df_display_source[ordered_columns].copy().sort_values(by=["ranking", "rating"], ascending=[False, False])
 
-            # ENHANCED CONFIGURATION BLOCK FOR MAIN DATA GRID
+            # ENHANCED CONFIGURATION BLOCK FOR MAIN DATA GRID (Added interactive browser-launching LinkColumn)
             st.data_editor(
                 df_display,
                 column_config={
@@ -640,6 +644,7 @@ with tab_map_view:
                     "ranking": st.column_config.NumberColumn("Ranking"),
                     "rating": st.column_config.NumberColumn("Rating"), 
                     "title": st.column_config.TextColumn("Title", disabled=True),
+                    "url": st.column_config.LinkColumn("Listing URL", display_text="Open Listing 🔗", disabled=True),
                     "address": st.column_config.TextColumn("Address", disabled=True), 
                     "area": st.column_config.TextColumn("Area", disabled=True),
                     "status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
@@ -724,11 +729,10 @@ with tab_bulk_parser:
         st.subheader("📋 Temporary Staging Inspection Deck")
         
         with st.form("staging_inspection_form_deck"):
-            # ENHANCED CONFIGURATION BLOCK FOR TEMPORARY STAGING GRID
             staged_df_editor = st.data_editor(
                 st.session_state["bulk_staging_dataframe"],
                 column_config={
-                    "url": st.column_config.TextColumn("URL", disabled=True),
+                    "url": st.column_config.LinkColumn("URL", display_text="Open Link 🔗", disabled=True),
                     "title": st.column_config.TextColumn("Title", disabled=False),
                     "address": st.column_config.TextColumn("Address (Editable)", disabled=False),
                     "price": st.column_config.NumberColumn("Base Price (zł)", format="%.2f", disabled=False),
