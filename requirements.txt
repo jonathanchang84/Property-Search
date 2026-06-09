@@ -1,8 +1,9 @@
 streamlit
+requests
+beautifulsoup4
 google-genai
 pydantic
-supabase
 geopy
-beautifulsoup4
-requests
+supabase
 pandas
+certifi

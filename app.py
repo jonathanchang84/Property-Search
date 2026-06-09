@@ -75,7 +75,8 @@ def intelligent_scraper(url: str):
         {clean_text}
         """
         
-        models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash']
+        # Locked to modern endpoints to prevent 404 routing mismatches
+        models_to_try = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
         ai_response = None
         
         for model_name in models_to_try:
@@ -92,7 +93,7 @@ def intelligent_scraper(url: str):
                 break
             except Exception as model_error:
                 if model_name == 'gemini-2.5-flash':
-                    st.warning("Gemini 2.5 Flash is running hot. Falling back to high-capacity Gemini 1.5 Flash...")
+                    st.warning("Gemini 2.5 Flash is busy. Rerouting to high-capacity Gemini 2.5 Flash-Lite backup...")
                     time.sleep(1) 
                     continue
                 else:
@@ -106,18 +107,14 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. FIXED GEOCODING FUNCTION (Address -> Coordinates)
+# 3. FIXED GEOCODING FUNCTION USING CERTIFI
 def get_coordinates(address_string: str):
     try:
-        # Create a secure SSL context explicitly using certifi's verified certificate bundle
         secure_ssl_context = ssl.create_default_context(cafile=certifi.where())
-        
-        # Inject the secure context directly into Nominatim's underlying connection pool configuration
         geolocator = Nominatim(
             user_agent="property_tracker_hub_app",
             ssl_context=secure_ssl_context
         )
-        
         location = geolocator.geocode(address_string, timeout=10)
         if location:
             return location.latitude, location.longitude
@@ -175,7 +172,7 @@ with col1:
         year_val = st.text_input("Construction Year:", value=cache["year_built"])
         
         st.markdown("### Your Custom Input Evaluation Metrics")
-        user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Magnolia Park mall, great connection.")
+        user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.")
         user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5)
         current_status = st.selectbox("Pipeline Track Status:", ["Interested", "Viewing Arranged", "Offer Submitted", "Archived"])
         
