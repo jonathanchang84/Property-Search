@@ -68,7 +68,7 @@ def clean_area_value(area_str: str) -> float:
     except ValueError:
         return 0.0
 
-# 2. INTELLIGENT SCRAPER TARGETING METADATA ATTRIBUTES
+# 2. INTELLIGENT SCRAPER TARGETING METADATA ATTRIBUTES (TAB 1 USE CASE)
 def intelligent_scraper(url: str):
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -115,7 +115,6 @@ def intelligent_scraper(url: str):
         {clean_text}
         """
         
-        # Valid naming convention strings leveraging standard Flash variants
         models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
         ai_response = None
         
@@ -150,6 +149,63 @@ def intelligent_scraper(url: str):
         
     except Exception as e:
         st.error(f"Gemini API Error: {e}")
+        return None
+
+# --- BULK PROCESSING NON-AI API SCRAPER ENGINE ---
+def deterministic_bulk_api_scraper(url: str):
+    """
+    Scrapes listing raw properties using Otodom's public JSON endpoint 
+    by resolving the alphanumeric ID tracking string via pattern regex.
+    """
+    try:
+        # Step 2 & 3 implementation: Extract structural tracking string
+        id_match = re.search(r"-(ID[a-zA-Z0-9]+)$", url.strip())
+        if not id_match:
+            return None
+        
+        listing_slug_id = id_match.group(1)
+        api_target_endpoint = f"https://www.otodom.pl/api/v1/estate/page/{listing_slug_id}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.otodom.pl/"
+        }
+        
+        response = requests.get(api_target_endpoint, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return None
+            
+        data = response.json()
+        
+        # Safe breakdown parsing from structural dictionary targets
+        title = data.get("title", "Unknown Title")
+        description = data.get("description", "")[:200]
+        
+        price_val = str(data.get("price", {}).get("value", "0"))
+        area_val = str(data.get("area", {}).get("value", "0"))
+        
+        # Pull localization context
+        loc_data = data.get("location", {})
+        address_parts = [
+            loc_data.get("street", {}).get("name", ""),
+            loc_data.get("district", {}).get("name", ""),
+            loc_data.get("city", {}).get("name", "")
+        ]
+        address = ", ".join([p for p in address_parts if p]) or "Wrocław, Poland"
+        
+        # Pull structural characteristics
+        characteristics = {item["key"]: item["value"] for item in data.get("characteristics", []) if "key" in item}
+        rooms = str(characteristics.get("rooms_num", "1"))
+        floor = str(characteristics.get("floor_no", "Ground"))
+        floors = str(characteristics.get("building_floors_num", "Unknown"))
+        year_built = str(characteristics.get("build_year", "Unknown"))
+        
+        return {
+            "url": url, "title": title, "address": address, "price": clean_monetary_value(price_val),
+            "area": area_val, "rooms": rooms, "floor": floor, "floors": floors, "year_built": year_built,
+            "description": description
+        }
+    except Exception:
         return None
 
 # 3. ROBUST HYPER-RESILIENT GEOCODING ENGINE WITH DISTRICT FALLBACK
@@ -224,7 +280,8 @@ STATUS_OPTIONS = ["Interested", "Viewing Arranged", "Offer Submitted", "No Longe
 st.set_page_config(layout="wide", page_title="Property Evaluation Hub")
 st.title("🏡 Property Hub Tracker Workspace")
 
-tab_scraped, tab_map_view = st.tabs(["📊 Parser & Evaluator", "🗺️ Portfolio Map Explorer"])
+# Added Tab 3 to layout row container allocation mappings
+tab_scraped, tab_map_view, tab_bulk_parser = st.tabs(["📊 Parser & Evaluator", "🗺️ Portfolio Map Explorer", "📥 Bulk Parser"])
 
 # =========================================================================
 # PAGE WORKSPACE 1: PARSER & EVALUATOR
@@ -620,4 +677,159 @@ with tab_map_view:
                     except Exception as e:
                         st.error(f"Failed to synchronize table changes: {e}")
                 
+                st.rerun()
+
+# =========================================================================
+# PAGE WORKSPACE 3: BULK PARSER (NEW FEATURES CONSOLE)
+# =========================================================================
+with tab_bulk_parser:
+    st.subheader("📥 Bulk Property Processing Center")
+    st.markdown("Upload a standard `.csv` file containing Otodom listing links under a column named **`url`**.")
+    
+    csv_file_handler = st.file_uploader("Choose CSV File Input Source", type=["csv"], key="bulk_csv_file_uploader")
+    
+    if csv_file_handler:
+        try:
+            input_dataframe = pd.read_csv(csv_file_handler)
+            if "url" not in input_dataframe.columns:
+                st.error("❌ The uploaded CSV file must contain a column named exactly **'url'**.")
+            else:
+                target_url_list = input_dataframe["url"].dropna().unique().tolist()
+                st.info(f"📋 Found **{len(target_url_list)}** unique links to evaluate.")
+                
+                if st.button("Execute Non-AI Bulk Parsing Execution", key="btn_run_bulk_processing"):
+                    staged_results_accumulator = []
+                    
+                    processing_progress_bar = st.progress(0)
+                    status_message_placeholder = st.empty()
+                    
+                    for index, active_url in enumerate(target_url_list):
+                        status_message_placeholder.text(f"Parsing item {index+1}/{len(target_url_list)}: {active_url[:50]}...")
+                        
+                        parsed_record = deterministic_bulk_api_scraper(active_url)
+                        if parsed_record:
+                            # Pre-populate custom workbench variables
+                            parsed_record["ranking"] = 0
+                            parsed_record["rating"] = 5
+                            parsed_record["status"] = "Interested"
+                            parsed_record["garage_cost"] = 0.0
+                            parsed_record["storage_cost"] = 0.0
+                            parsed_record["my_notes"] = ""
+                            staged_results_accumulator.append(parsed_record)
+                        
+                        processing_progress_bar.progress((index + 1) / len(target_url_list))
+                        time.sleep(0.2) # Courteous throttling gap delay
+                        
+                    status_message_placeholder.empty()
+                    processing_progress_bar.empty()
+                    
+                    if staged_results_accumulator:
+                        st.session_state["bulk_staging_dataframe"] = pd.DataFrame(staged_results_accumulator)
+                        st.success(f"Successfully processed and staged **{len(staged_results_accumulator)}** properties!")
+                    else:
+                        st.error("No data could be extracted. Please confirm the link strings contain valid IDs.")
+                        
+        except Exception as csv_error:
+            st.error(f"Failed to process the uploaded file format: {csv_error}")
+            
+    # Staging Workbench Review Interface Area
+    if "bulk_staging_dataframe" in st.session_state and not st.session_state["bulk_staging_dataframe"].empty:
+        st.markdown("---")
+        st.subheader("📋 Temporary Staging Inspection Deck")
+        st.caption("You can verify and edit fields directly in this grid before committing them permanently to Supabase.")
+        
+        staged_df_editor = st.data_editor(
+            st.session_state["bulk_staging_dataframe"],
+            column_config={
+                "url": st.column_config.TextColumn("URL", disabled=True),
+                "title": st.column_config.TextColumn("Title", disabled=False),
+                "address": st.column_config.TextColumn("Address (Editable)", disabled=False),
+                "price": st.column_config.NumberColumn("Base Price (zł)", format="%.2f", disabled=False),
+                "area": st.column_config.TextColumn("Area (m²)", disabled=False),
+                "rooms": st.column_config.TextColumn("Rooms", disabled=False),
+                "floor": st.column_config.TextColumn("Floor", disabled=False),
+                "floors": st.column_config.TextColumn("Total Floors", disabled=False),
+                "year_built": st.column_config.TextColumn("Year Built", disabled=False),
+                "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1),
+                "rating": st.column_config.NumberColumn("Rating", min_value=1, max_value=10, step=1),
+                "status": st.column_config.SelectboxColumn("Pipeline Track Status", options=STATUS_OPTIONS),
+                "garage_cost": st.column_config.NumberColumn("Garage Cost (zł)", format="%.2f"),
+                "storage_cost": st.column_config.NumberColumn("Storage Cost (zł)", format="%.2f"),
+                "my_notes": st.column_config.TextColumn("My Notes"),
+                "description": None # Hide full string columns to save layout width real estate
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="bulk_staging_active_grid"
+        )
+        
+        # Save modifications back to session state structure tracking reference
+        if st.session_state.get("bulk_staging_active_grid") and st.session_state["bulk_staging_active_grid"]["edited_rows"]:
+            for row_idx_str, fields_dict in st.session_state["bulk_staging_active_grid"]["edited_rows"].items():
+                row_idx = int(row_idx_str)
+                for key, val in fields_dict.items():
+                    st.session_state["bulk_staging_dataframe"].iat[row_idx, st.session_state["bulk_staging_dataframe"].columns.get_loc(key)] = val
+
+        # Execution Step 5 Action Panel Trigger
+        commit_col1, commit_col2 = st.columns([1, 4])
+        with commit_col1:
+            if st.button("🚀 Commit All to Database", key="btn_commit_bulk_to_supabase_fleet"):
+                with st.spinner("Resolving geo map matches and writing to database table..."):
+                    now_iso = datetime.utcnow().isoformat() + "Z"
+                    success_write_count = 0
+                    
+                    for _, row in st.session_state["bulk_staging_dataframe"].iterrows():
+                        try:
+                            # Historical versioning cleanups
+                            existing_check = supabase.table("properties")\
+                                .select("id")\
+                                .eq("url", row["url"])\
+                                .eq("is_current", True)\
+                                .execute()
+                            
+                            if existing_check.data:
+                                old_record_id = existing_check.data[0]["id"]
+                                supabase.table("properties")\
+                                    .update({"is_current": False, "valid_to": now_iso})\
+                                    .eq("id", old_record_id)\
+                                    .execute()
+                            
+                            # Geolocation evaluation loop on the fly
+                            lat, lon = get_coordinates(row["address"])
+                            
+                            payload = {
+                                "url": row["url"],
+                                "title": row["title"],
+                                "address": row["address"],
+                                "price": float(row["price"]),
+                                "area": str(row["area"]),
+                                "rooms": str(row["rooms"]),
+                                "floor": str(row["floor"]),
+                                "floors": str(row["floors"]),
+                                "year_built": str(row["year_built"]),
+                                "garage_cost": float(row["garage_cost"]),
+                                "storage_cost": float(row["storage_cost"]),
+                                "my_notes": str(row["my_notes"]),
+                                "rating": int(row["rating"]),
+                                "ranking": int(row["ranking"]),
+                                "status": str(row["status"]),
+                                "valid_from": now_iso,
+                                "is_current": True,
+                                "latitude": lat,
+                                "longitude": lon
+                            }
+                            
+                            supabase.table("properties").insert(payload).execute()
+                            success_write_count += 1
+                        except Exception as write_err:
+                            st.error(f"Failed to log entry row {row['title'][:20]}: {write_err}")
+                            
+                    st.success(f"Successfully integrated **{success_write_count}** new entries into your system portfolio!")
+                    del st.session_state["bulk_staging_dataframe"]
+                    time.sleep(1)
+                    st.rerun()
+                    
+        with commit_col2:
+            if st.button("🗑️ Clear Staging Table", key="btn_clear_bulk_staging"):
+                del st.session_state["bulk_staging_dataframe"]
                 st.rerun()
