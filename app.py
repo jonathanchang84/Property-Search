@@ -175,22 +175,37 @@ def deterministic_bulk_api_scraper(url: str):
         
         if target_script and target_script.string:
             raw_json = json.loads(target_script.string)
-            
-            # Navigate the nested hydration state dictionary safely
             ad_data = raw_json.get("props", {}).get("pageProps", {}).get("ad", {})
+            
             if ad_data:
                 title = ad_data.get("title", "Unknown Title")
                 description = ad_data.get("description", "")[:200]
-                price_val = str(ad_data.get("target", {}).get("Price", "0"))
-                area_val = str(ad_data.get("target", {}).get("Area", "0"))
                 
-                # Dynamic fallback array mapping for the address text block
-                address = ad_data.get("location", {}).get("address", {}).get("value", "Wrocław, Poland")
+                # Dynamic Extraction Strategy for Nested Values
+                target_map = ad_data.get("target", {})
+                price_val = str(target_map.get("Price", "0"))
+                area_val = str(target_map.get("Area", "0"))
                 
-                rooms = str(ad_data.get("target", {}).get("Rooms_num", ["1"])[0])
-                floor = str(ad_data.get("target", {}).get("Floor_no", ["Ground"])[0])
-                floors = str(ad_data.get("target", {}).get("Building_floors_num", ["Unknown"])[0])
-                year_built = str(ad_data.get("target", {}).get("Build_year", ["Unknown"])[0])
+                # --- FIXED ADDRESS PROCESSING ENGINE ---
+                labels = ad_data.get("location", {}).get("labels", [])
+                if labels:
+                    # Traverses through Otodom label dict targets: e.g. [{"label": "ul. Zaporoska"}, {"label": "Krzyki"}]
+                    address_parts = [item.get("label") for item in labels if item.get("label")]
+                    address = ", ".join(address_parts)
+                else:
+                    address = ad_data.get("location", {}).get("address", {}).get("value", "Wrocław, Poland")
+                
+                # Safely harvest properties that may be lists or raw strings
+                def extract_target_char(key_name, default="Unknown"):
+                    val = target_map.get(key_name)
+                    if isinstance(val, list) and len(val) > 0:
+                        return str(val[0])
+                    return str(val) if val else default
+
+                rooms = extract_target_char("Rooms_num", "1")
+                floor = extract_target_char("Floor_no", "Ground")
+                floors = extract_target_char("Building_floors_num", "Unknown")
+                year_built = extract_target_char("Build_year", "Unknown")
                 
                 return {
                     "url": url, "title": title, "address": address, "price": clean_monetary_value(price_val),
@@ -198,15 +213,14 @@ def deterministic_bulk_api_scraper(url: str):
                     "description": description
                 }
 
-        # FALLBACK PATHWAY: If JSON tracking structures are missing, harvest via regex
+        # FALLBACK PATHWAY: Regex strategy if script tags mutate
         page_html = response.text
-        
         title_match = re.search(r'"title"\s*:\s*"([^"]+)"', page_html)
-        price_match = re.search(r'"price"\s*:\s*\{\s*"value"\s*:\s*([0-9.]+)', page_html)
-        area_match = re.search(r'"area"\s*:\s*\{\s*"value"\s*:\s*([0-9.]+)', page_html)
+        price_match = re.search(r'"value"\s*:\s*([0-9\s]+),[^}]*"__typename"\s*:\s*"Price"', page_html) or re.search(r'"Price"\s*:\s*\[\s*"([0-9.]+)"', page_html)
+        area_match = re.search(r'"Area"\s*:\s*\[\s*"([0-9.]+)"', page_html)
         
         title = title_match.group(1) if title_match else "Otodom Property Listing"
-        price = float(price_match.group(1)) if price_match else 0.0
+        price = clean_monetary_value(price_match.group(1)) if price_match else 0.0
         area = area_match.group(1) if area_match else "0"
         
         return {
@@ -498,7 +512,6 @@ with tab_map_view:
             min_p = float(df_current["Total Cost"].min()) if not df_current.empty else 0.0
             max_p = float(df_current["Total Cost"].max()) if not df_current.empty else 1500000.0
             
-            # Slider Range Check Safety Pad
             if max_p <= min_p:
                 max_p = min_p + 1000.0
                 
@@ -510,7 +523,6 @@ with tab_map_view:
             min_r = int(df_current["ranking"].min()) if not df_current.empty else 0
             max_r = int(df_current["ranking"].max()) if not df_current.empty else 100
             
-            # Slider Range Check Safety Pad
             if max_r <= min_r:
                 max_r = min_r + 1
                 
@@ -653,7 +665,6 @@ with tab_bulk_parser:
             key="bulk_text_area_urls"
         )
         if text_area_input.strip():
-            # Extract anything resembling an otodom URL block using a clean pattern split
             extracted_links = re.split(r'[\s,]+', text_area_input)
             valid_links = [lnk.strip() for lnk in extracted_links if "otodom.pl" in lnk.lower() and lnk.strip()]
             target_url_list.extend(valid_links)
@@ -674,7 +685,6 @@ with tab_bulk_parser:
                 parsed_record = deterministic_bulk_api_scraper(active_url)
                 
                 if parsed_record:
-                    # Enrich layout records with editable default attributes on execution mapping
                     parsed_record["ranking"] = 0
                     parsed_record["rating"] = 5
                     parsed_record["status"] = "Interested"
@@ -691,7 +701,7 @@ with tab_bulk_parser:
             
             if staged_results_accumulator:
                 st.session_state["bulk_staging_dataframe"] = pd.DataFrame(staged_results_accumulator)
-                st.success(f"Successfully tracked and parsed **{len(staged_results_accumulator)}** rows inside staging layer.")
+                st.success(f"Successfully processed and staged {len(staged_results_accumulator)} properties!")
             else:
                 st.error("Extraction failed to resolve listing fields. Confirm that target addresses remain active.")
 
@@ -701,7 +711,6 @@ with tab_bulk_parser:
         st.subheader("📋 Temporary Staging Inspection Deck")
         st.caption("💡 To drop a property completely before saving, select the row header checkbox and tap the **Trash Can** icon or hit backspace/delete.")
         
-        # Deploy completely dynamic grid settings with row deletion tracking enabled natively
         staged_df_editor = st.data_editor(
             st.session_state["bulk_staging_dataframe"],
             column_config={
@@ -724,17 +733,15 @@ with tab_bulk_parser:
             },
             use_container_width=True,
             hide_index=False,
-            num_rows="dynamic",  # Unlocks the dynamic removal tracking layer
+            num_rows="dynamic",
             key="bulk_staging_active_grid"
         )
         
-        # Core State Synchronization Loop capturing updates and explicit row deletions
         grid_state = st.session_state.get("bulk_staging_active_grid")
         if grid_state:
             has_state_changed = False
             current_tracked_df = st.session_state["bulk_staging_dataframe"].copy()
             
-            # Action 1: Handle field edits inline
             if grid_state["edited_rows"]:
                 for row_idx_str, fields_dict in grid_state["edited_rows"].items():
                     row_idx = int(row_idx_str)
@@ -742,7 +749,6 @@ with tab_bulk_parser:
                         current_tracked_df.iat[row_idx, current_tracked_df.columns.get_loc(key)] = val
                 has_state_changed = True
                 
-            # Action 2: Handle live row deletions instantly
             if grid_state["deleted_rows"]:
                 indices_to_drop = [int(idx) for idx in grid_state["deleted_rows"]]
                 current_tracked_df = current_tracked_df.drop(indices_to_drop).reset_index(drop=True)
@@ -762,7 +768,6 @@ with tab_bulk_parser:
                     
                     for _, row in st.session_state["bulk_staging_dataframe"].iterrows():
                         try:
-                            # Historical versioning cleanups
                             existing_check = supabase.table("properties")\
                                 .select("id").eq("url", row["url"]).eq("is_current", True).execute()
                             
@@ -771,7 +776,6 @@ with tab_bulk_parser:
                                     .update({"is_current": False, "valid_to": now_iso})\
                                     .eq("id", existing_check.data[0]["id"]).execute()
                             
-                            # Geolocation evaluation loop on the fly
                             lat, lon = get_coordinates(row["address"])
                             
                             payload = {
