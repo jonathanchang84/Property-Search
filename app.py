@@ -495,14 +495,26 @@ with tab_map_view:
                 ]
 
         with filter_col3:
+            min_p = float(df_current["Total Cost"].min()) if not df_current.empty else 0.0
             max_p = float(df_current["Total Cost"].max()) if not df_current.empty else 1500000.0
-            budget_range = st.slider("Filter by Budget (zł):", min_value=0.0, max_value=max_p, value=(0.0, max_p), step=10000.0, format="%d zł")
+            
+            # Slider Range Check Safety Pad
+            if max_p <= min_p:
+                max_p = min_p + 1000.0
+                
+            budget_range = st.slider("Filter by Budget (zł):", min_value=min_p, max_value=max_p, value=(min_p, max_p), step=10000.0, format="%d zł")
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
 
         with filter_col4:
+            min_r = int(df_current["ranking"].min()) if not df_current.empty else 0
             max_r = int(df_current["ranking"].max()) if not df_current.empty else 100
-            ranking_range = st.slider("Filter by Ranking:", min_value=0, max_value=max_r, value=(0, max_r), step=1)
+            
+            # Slider Range Check Safety Pad
+            if max_r <= min_r:
+                max_r = min_r + 1
+                
+            ranking_range = st.slider("Filter by Ranking:", min_value=min_r, max_value=max_r, value=(min_r, max_r), step=1)
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
 
