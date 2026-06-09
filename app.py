@@ -9,6 +9,7 @@ from supabase import create_client
 import pandas as pd
 import time
 import folium
+import re
 from streamlit_folium import st_folium
 from datetime import datetime
 
@@ -21,12 +22,34 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 class PropertyDetails(BaseModel):
     title: str = Field(description="The main headline or title of the property listing")
     address: str = Field(description="The full address location hierarchy found on the listing webpage.")
-    price: str = Field(description="The listed price, including the currency symbol")
+    price: str = Field(description="The listed price string, e.g., '850 000 zł' or '750000'")
     area: str = Field(description="The total area/surface size of the property in square meters (m²)")
     rooms: str = Field(description="The number of rooms in the property")
     floor: str = Field(description="The floor level of the property, e.g., '1st floor', 'Ground floor', 'Top floor'")
     year_built: str = Field(description="The year the building/property was constructed. Use 'Unknown' if missing.")
     description: str = Field(description="A brief summary of key features or selling points from the listing text.")
+
+# HELPER: Robust Monetary Extraction Engine
+def clean_monetary_value(value_str: str) -> float:
+    if not value_str:
+        return 0.0
+    # Strip everything except numbers, periods, and commas
+    cleaned = re.sub(r'[^\d.,]', '', value_str)
+    if not cleaned:
+        return 0.0
+    # Handle European comma decimals if present, otherwise treat as thousands separator
+    if ',' in cleaned and '.' in cleaned:
+        cleaned = cleaned.replace(',', '')
+    elif ',' in cleaned:
+        parts = cleaned.split(',')
+        if len(parts[-1]) == 2:  # looks like cents/grosze
+            cleaned = cleaned.replace(',', '.')
+        else:
+            cleaned = cleaned.replace(',', '')
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
 
 # 2. INTELLIGENT SCRAPER TARGETING METADATA ATTRIBUTES
 def intelligent_scraper(url: str):
@@ -98,35 +121,35 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. UPGRADED STRUCTURED GEOCODING ENGINE (GOOGLE-MAPS STYLE COMPATIBILITY)
+# 3. ROBUST TARGETED GEOCODING MATCH ENGINE
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v9")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v13")
+    address_string = address_string.strip("'\" []")
     
-    # Strategy 1: Attempt Structured Query Decomposition (Highly robust for complex Polish addresses)
     try:
         if "," in address_string:
             parts = [p.strip() for p in address_string.split(",")]
+            street_candidate = parts[0]
             
-            # Extract the street anchor (e.g., 'ul. Popowicka')
-            street_part = next((p for p in parts if p.lower().startswith("ul.") or "os." in p.lower() or "osiedle" in p.lower()), parts[0])
-            
-            # Extract the city anchor
-            city_part = "Wrocław" # Default fallback safety
-            for p in parts:
-                if "wrocław" in p.lower():
-                    city_part = "Wrocław"
+            city_candidate = "Wrocław"
+            for part in parts:
+                lower_part = part.lower()
+                if "wrocław" in lower_part:
+                    city_candidate = "Wrocław"
                     break
-                elif "kraków" in p.lower():
-                    city_part = "Kraków"
+                elif "kraków" in lower_part or "krakow" in lower_part:
+                    city_candidate = "Kraków"
                     break
-                elif "warszawa" in p.lower():
-                    city_part = "Warszawa"
+                elif "warszawa" in lower_part:
+                    city_candidate = "Warszawa"
                     break
-            
-            # Build structured dictionary. This bypasses intermediary neighborhood clutter entirely.
+
+            if not street_candidate.lower().startswith("ul.") and not street_candidate.lower().startswith("os."):
+                street_candidate = f"ul. {street_candidate}"
+
             structured_query = {
-                "street": street_part,
-                "city": city_part,
+                "street": street_candidate,
+                "city": city_candidate,
                 "country": "Poland"
             }
             
@@ -136,7 +159,6 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
 
-    # Strategy 2: Global Raw String Fallback Layout
     try:
         location = geolocator.geocode(address_string, timeout=10)
         if location:
@@ -169,12 +191,13 @@ with tab_scraped:
                     extracted = intelligent_scraper(target_url)
                     if extracted:
                         lat, lon = get_coordinates(extracted.address)
+                        numeric_price = clean_monetary_value(extracted.price)
                         
                         st.session_state["scraped_cache"] = {
                             "url": target_url,
                             "title": extracted.title,
                             "address": extracted.address,
-                            "price": extracted.price,
+                            "price": numeric_price,
                             "area": extracted.area,
                             "rooms": extracted.rooms,
                             "floor": extracted.floor,
@@ -193,7 +216,16 @@ with tab_scraped:
             st.subheader("Step 2: Self-Input & Data Enrichment")
             
             st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True, key="field_title")
-            st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True, key="field_price")
+            
+            # --- CONVERTED TO INTERACTIVE MONETARY NUMBER INPUT FIELD ---
+            price_input = st.number_input(
+                "Base Property Price (zł):", 
+                min_value=0.0, 
+                value=float(cache["price"]), 
+                step=5000.0, 
+                format="%.2f", 
+                key="field_price_numeric"
+            )
             
             user_edited_address = st.text_input(
                 "Property Address (Editable):", 
@@ -201,7 +233,6 @@ with tab_scraped:
                 key="field_address_editable"
             )
             
-            # Recalculate coordinates if user updates the address text box
             if user_edited_address != cache["address"]:
                 new_lat, new_lon = get_coordinates(user_edited_address)
                 cache["address"] = user_edited_address
@@ -212,7 +243,7 @@ with tab_scraped:
             if cache["latitude"] and cache["longitude"]:
                 st.success(f"✅ Map Match Found! Coordinates resolved to: {cache['latitude']}, {cache['longitude']}")
             else:
-                st.error("❌ Geocoding Failed! The address could not be matched automatically. Try removing the district terms manually.")
+                st.error("❌ Geocoding Failed! Try cleaning up the text block to just: 'ul. Popowicka, Wrocław'")
             
             metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             with metric_col1:
@@ -224,6 +255,14 @@ with tab_scraped:
             with metric_col4:
                 st.text_input("Year Built:", value=cache["year_built"], disabled=True, key="field_year")
             
+            # --- MONETARY AMENDMENT VALUE FIELDS ---
+            st.markdown("### 💰 Additional Transaction Outlays (Numeric Polish Złoty)")
+            cost_col1, cost_col2 = st.columns(2)
+            with cost_col1:
+                garage_input = st.number_input("Additional Cost - Garage (zł):", min_value=0.0, value=0.0, step=1000.0, format="%.2f", key="field_garage_numeric")
+            with cost_col2:
+                storage_input = st.number_input("Additional Cost - Storage (zł):", min_value=0.0, value=0.0, step=500.0, format="%.2f", key="field_storage_numeric")
+
             st.markdown("### Your Custom Input Evaluation Metrics")
             user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.", key="field_notes")
             user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating")
@@ -250,11 +289,13 @@ with tab_scraped:
                         "url": cache["url"],
                         "title": cache["title"],
                         "address": cache["address"],
-                        "price": cache["price"],
+                        "price": price_input,           # Pushing clean numerical float to DB
                         "area": cache["area"],
                         "rooms": cache["rooms"],
                         "floor": cache["floor"],
                         "year_built": cache["year_built"],
+                        "garage_cost": garage_input,
+                        "storage_cost": storage_input,
                         "my_notes": user_notes,
                         "rating": user_rating,
                         "status": current_status,
@@ -282,17 +323,37 @@ with col2:
 
     if properties_list:
         df_all = pd.DataFrame(properties_list)
-        df_current = df_all[df_all["is_current"] == True]
+        df_current = df_all[df_all["is_current"] == True].copy()
         
         if not df_current.empty:
-            display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]
+            df_current["price"] = pd.to_numeric(df_current["price"], errors='coerce').fillna(0.0)
+            df_current["garage_cost"] = pd.to_numeric(df_current["garage_cost"], errors='coerce').fillna(0.0)
+            df_current["storage_cost"] = pd.to_numeric(df_current["storage_cost"], errors='coerce').fillna(0.0)
+            df_current["Total Outlay"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
+            
+            display_columns = ["rating", "title", "price", "garage_cost", "storage_cost", "Total Outlay", "status", "my_notes", "area", "rooms", "floor", "address"]
             existing_cols = [c for c in display_columns if c in df_current.columns]
-            st.dataframe(df_current[existing_cols].sort_values(by="rating", ascending=False), use_container_width=True)
+            
+            st.dataframe(
+                df_current[existing_cols].sort_values(by="rating", ascending=False),
+                column_config={
+                    "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
+                    "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł"),
+                    "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł"),
+                    "Total Outlay": st.column_config.NumberColumn("Total Budget Outlay", format="%.2f zł"),
+                },
+                use_container_width=True
+            )
             
         st.markdown("---")
         st.write("### Complete Audit Timeline (SCD Type 2 History)")
-        df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False])
-        st.dataframe(df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]], use_container_width=True)
+        df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False]).copy()
+        df_sorted["price"] = pd.to_numeric(df_sorted["price"], errors='coerce').fillna(0.0)
+        st.dataframe(
+            df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]],
+            column_config={"price": st.column_config.NumberColumn("Price Level History", format="%.2f zł")},
+            use_container_width=True
+        )
     else:
         st.info("No records present in your tracking ledger index yet.")
 
@@ -316,7 +377,7 @@ with tab_map_view:
     
     if map_properties:
         df_map_all = pd.DataFrame(map_properties)
-        df_map_current = df_map_all[df_map_all["is_current"] == True]
+        df_map_current = df_map_all[df_map_all["is_current"] == True].copy()
         
         if "latitude" in df_map_current.columns and "longitude" in df_map_current.columns:
             df_map_current["latitude"] = pd.to_numeric(df_map_current["latitude"], errors='coerce')
@@ -328,12 +389,21 @@ with tab_map_view:
                     lat_coord = float(row['latitude'])
                     lon_coord = float(row['longitude'])
                     
+                    p_base = float(row['price']) if row['price'] else 0.0
+                    p_gar = float(row['garage_cost']) if row['garage_cost'] else 0.0
+                    p_stor = float(row['storage_cost']) if row['storage_cost'] else 0.0
+                    p_total = p_base + p_gar + p_stor
+                    
                     html_popup_markup = f"""
-                    <div style='font-family: Arial, sans-serif; min-width: 200px;'>
+                    <div style='font-family: Arial, sans-serif; min-width: 220px;'>
                         <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
-                        <b>Price:</b> {row['price']}<br>
+                        <b>Base Price:</b> {p_base:,.2f} zł<br>
+                        <b>Garage space:</b> {p_gar:,.2f} zł<br>
+                        <b>Storage Unit:</b> {p_stor:,.2f} zł<br>
+                        <hr style='margin: 4px 0;'>
+                        <b>Total Budget Outlay:</b> <span style='color:#d9534f; font-weight:bold;'>{p_total:,.2f} zł</span><br>
                         <b>Rating Score:</b> ⭐ {row['rating']}/10<br>
-                        <b>Pipeline Status:</b> <span style='color:green;'>{row['status']}</span><br>
+                        <b>Pipeline Status:</b> <span style='color:green; font-weight:bold;'>{row['status']}</span><br>
                         <b>Personal Notes:</b> <i>{row['my_notes']}</i>
                     </div>
                     """
@@ -357,8 +427,22 @@ with tab_map_view:
         st.markdown("---")
         st.subheader("📋 Explorer Quick-Reference Index")
         df_map_all = pd.DataFrame(map_properties)
-        df_map_current = df_map_all[df_map_all["is_current"] == True]
+        df_map_current = df_map_all[df_map_all["is_current"] == True].copy()
         
-        display_columns_map = ["rating", "status", "price", "title", "my_notes", "area", "address"]
+        df_map_current["price"] = pd.to_numeric(df_map_current["price"], errors='coerce').fillna(0.0)
+        df_map_current["garage_cost"] = pd.to_numeric(df_map_current["garage_cost"], errors='coerce').fillna(0.0)
+        df_map_current["storage_cost"] = pd.to_numeric(df_map_current["storage_cost"], errors='coerce').fillna(0.0)
+        df_map_current["Total Outlay"] = df_map_current["price"] + df_map_current["garage_cost"] + df_map_current["storage_cost"]
+
+        display_columns_map = ["rating", "status", "price", "garage_cost", "storage_cost", "Total Outlay", "title", "my_notes", "area", "address"]
         existing_cols_map = [c for c in display_columns_map if c in df_map_current.columns]
-        st.dataframe(df_map_current[existing_cols_map].sort_values(by="rating", ascending=False), use_container_width=True)
+        st.dataframe(
+            df_map_current[existing_cols_map].sort_values(by="rating", ascending=False),
+            column_config={
+                "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
+                "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł"),
+                "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł"),
+                "Total Outlay": st.column_config.NumberColumn("Total Budget Outlay", format="%.2f zł"),
+            },
+            use_container_width=True
+        )
