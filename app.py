@@ -1,8 +1,6 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, Field
 from geopy.geocoders import Nominatim
 from supabase import create_client
@@ -10,6 +8,7 @@ import pandas as pd
 import time
 import folium
 import re
+import json
 from streamlit_folium import st_folium
 from datetime import datetime
 
@@ -18,7 +17,7 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 1. SPECIFIC SPECIFICATION BLUEPRINT FOR GEMINI EXTRACTION
+# 1. DATA TYPE STRUCTURE COMPLIANCE BLUEPRINT
 class PropertyDetails(BaseModel):
     title: str = Field(description="The main headline or title of the property listing")
     address: str = Field(description="The full address location hierarchy found on the listing webpage.")
@@ -68,88 +67,100 @@ def clean_area_value(area_str: str) -> float:
     except ValueError:
         return 0.0
 
-# 2. INTELLIGENT SCRAPER TARGETING METADATA ATTRIBUTES
+# 2. LOCAL RULE-BASED SELECTOR DATA ENGINE (REPLACES GEMINI LLM EXECUTION LAYER)
 def intelligent_scraper(url: str):
+    """
+    High-resiliency local HTML data engine. Extracts raw backend parameters 
+    directly from the embedded state scripts, completely removing Google API dependencies.
+    """
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
         response = requests.get(url, headers=headers, timeout=10)
-        
-        soup = BeautifulSoup(response.text, "html.parser")
-        extracted_chunks = []
-        
-        container_elements = soup.find_all(attrs={"data-sentry-element": "Container"})
-        for container in container_elements:
-            container_text = container.get_text(strip=True)
-            if any(city in container_text for city in ["Wrocław", "Kraków", "Warszawa"]):
-                extracted_chunks.append(f"[Header Location Container]: {container_text}")
-        
-        targeted_elements = soup.find_all(lambda tag: tag.has_attr('data-sentry-element'))
-        for element in targeted_elements:
-            element_type = element['data-sentry-element']
-            element_text = element.get_text(strip=True)
-            if element_type == "Container" and len(element_text) > 300:
-                continue
-            if element_text:
-                extracted_chunks.append(f"[{element_type}]: {element_text}")
-                
-        if extracted_chunks:
-            clean_text = "\n".join(extracted_chunks)
-        else:
-            clean_text = soup.get_text(separator="\n", strip=True)
+        if response.status_code != 200:
+            st.error(f"Failed to access the website. HTTP Status Code: {response.status_code}")
+            return None
             
-        clean_text = clean_text[:6000] 
+        soup = BeautifulSoup(response.text, "html.parser")
         
-    except Exception as e:
-        st.error(f"Failed to read the website: {e}")
-        return None
-
-    try:
-        client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        # -------------------------------------------------------------
+        # METHOD A: EXTRACT VIA EMBEDDED APPLICATION JSON STATE ENGINE
+        # -------------------------------------------------------------
+        next_data_script = soup.find("script", id="__NEXT_DATA__")
         
-        prompt = f"""
-        You are an expert real estate data engineer. Carefully read the text below, which contains 
-        structured element tags extracted from a property listing. 
-        Analyze the key parameters and fill out the required schema details flawlessly.
-        
-        Extracted Elements & Content:
-        {clean_text}
-        """
-        
-        # Fixed model naming convention tailored strictly for the current GenAI client SDK layer
-        models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
-        ai_response = None
-        
-        for model_name in models_to_try:
+        if next_data_script:
             try:
-                ai_response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=PropertyDetails,
-                        temperature=0.1
-                    ),
-                )
-                break
-            except Exception as model_error:
-                error_str = str(model_error)
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    if model_name == 'gemini-2.5-flash':
-                        st.warning("Primary production tier baseline exhausted. Moving to secondary pipeline variant...")
-                        time.sleep(1)
-                        continue
-                    else:
-                        st.error("⚠️ Gemini API Daily Quota Exhausted completely across all operational free tier tracking models.")
-                        return None
-                else:
-                    raise model_error
+                state_json = json.loads(next_data_script.string)
+                props = state_json.get("props", {}).get("pageProps", {}).get("ad", {})
+                
+                if props:
+                    title = props.get("title", "Unknown Title")
                     
-        if ai_response:
-            return ai_response.parsed
-        return None
+                    target_loc = props.get("location", {})
+                    address_parts = [
+                        target_loc.get("address", {}).get("street", {}).get("name", ""),
+                        target_loc.get("address", {}).get("district", {}).get("name", ""),
+                        target_loc.get("address", {}).get("city", {}).get("name", "")
+                    ]
+                    address = ", ".join([p for p in address_parts if p]) or "Wrocław, Poland"
+                    
+                    characteristics = {c["key"]: c["value"] for c in props.get("characteristics", []) if "key" in c}
+                    
+                    price = str(props.get("target", {}).get("price", {}).get("value", "0"))
+                    area = str(characteristics.get("m", "0"))
+                    rooms = str(characteristics.get("rooms_num", "1"))
+                    floor = str(characteristics.get("floor_no", "Ground"))
+                    floors = str(characteristics.get("building_floors_num", "Unknown"))
+                    year_built = str(characteristics.get("build_year", "Unknown"))
+                    description = props.get("description", "")[:500]
+                    
+                    return PropertyDetails(
+                        title=title, address=address, price=price, area=area,
+                        rooms=rooms, floor=floor, floors=floors, year_built=year_built,
+                        description=description
+                    )
+            except Exception:
+                pass 
+                
+        # -------------------------------------------------------------
+        # METHOD B: FALLBACK VIA CSS TARGET PROPERTY TREE SELECTORS
+        # -------------------------------------------------------------
+        title_element = soup.find("h1", {"data-cy": "ad-top-headline"}) or soup.find("h1")
+        title = title_element.get_text(strip=True) if title_element else "Unknown Property Title"
         
-    except Exception as e:
-        st.error(f"Gemini API Error: {e}")
+        price_element = soup.find(attrs={"data-cy": "ad-price-item"})
+        price = price_element.get_text(strip=True) if price_element else "0"
+        
+        address_element = soup.find("a", {"href": "#map"}) or soup.find(attrs={"data-sentry-element": "Container"})
+        address = address_element.get_text(strip=True) if address_element else "Wrocław, Poland"
+        
+        area, rooms, floor, floors, year_built = "0", "1", "Ground", "Unknown", "Unknown"
+        
+        table_parameters = soup.find_all(attrs={"data-cy": "table-label-content"})
+        for param in table_parameters:
+            parent = param.parent
+            if parent:
+                text_label = param.get_text(strip=True).lower()
+                val_text = parent.get_text(strip=True).replace(param.get_text(strip=True), "")
+                
+                if "powierzchnia" in text_label:
+                    area = val_text
+                elif "liczba pokoi" in text_label:
+                    rooms = val_text
+                elif "piętro" in text_label:
+                    floor = val_text
+                elif "rok budowy" in text_label:
+                    year_built = val_text
+                    
+        return PropertyDetails(
+            title=title, address=address, price=price, area=area,
+            rooms=rooms, floor=floor, floors=floors, year_built=year_built,
+            description=title
+        )
+        
+    except Exception as general_error:
+        st.error(f"Local selector extraction pipeline failure: {general_error}")
         return None
 
 # 3. ROBUST HYPER-RESILIENT GEOCODING ENGINE WITH DISTRICT FALLBACK
@@ -239,7 +250,7 @@ with tab_scraped:
         
         if st.button("Analyze with Intelligent Parsing", key="btn_run_scraper"):
             if target_url:
-                with st.spinner("Scanning webpage metadata elements..."):
+                with st.spinner("Executing rule-based selectors..."):
                     extracted = intelligent_scraper(target_url)
                     if extracted:
                         lat, lon = get_coordinates(extracted.address)
@@ -259,7 +270,7 @@ with tab_scraped:
                             "latitude": lat,
                             "longitude": lon
                         }
-                        st.success("Web metadata extraction complete!")
+                        st.success("Web structure processing complete!")
             else:
                 st.warning("Please input a valid listing link.")
 
