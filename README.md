@@ -45,6 +45,10 @@ The application functions across two isolated execution scopes that communicate 
 3. **Map Visualization and Updates:** Valid rows render directly as geometric points using interactive, color-coded map markers.
 4. **Two-Way Table Updates:** Modifying cells directly within the data index triggers immediate background updates to the database table, refreshing the view automatically.
 
+---
+
+
+
 ## 3. Architectural Design
 
 The application utilizes a decoupled pattern separating the client execution environment, computational service layers, and the persistent storage backend.
