@@ -121,46 +121,68 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. ROBUST TARGETED GEOCODING MATCH ENGINE
+# 3. ROBUST HYPER-RESILIENT GEOCODING LAYERED ENGINE
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v13")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v14")
     address_string = address_string.strip("'\" []")
     
-    try:
-        if "," in address_string:
-            parts = [p.strip() for p in address_string.split(",")]
-            street_candidate = parts[0]
-            
+    # Extract structural chunks safely
+    parts = [p.strip() for p in address_string.split(",")] if "," in address_string else [address_string]
+    street_candidate = parts[0]
+    
+    # Deduce the city anchor
+    city_candidate = "Wrocław"
+    for part in parts:
+        lower_part = part.lower()
+        if "wrocław" in lower_part:
             city_candidate = "Wrocław"
-            for part in parts:
-                lower_part = part.lower()
-                if "wrocław" in lower_part:
-                    city_candidate = "Wrocław"
-                    break
-                elif "kraków" in lower_part or "krakow" in lower_part:
-                    city_candidate = "Kraków"
-                    break
-                elif "warszawa" in lower_part:
-                    city_candidate = "Warszawa"
-                    break
+            break
+        elif "kraków" in lower_part or "krakow" in lower_part:
+            city_candidate = "Kraków"
+            break
+        elif "warszawa" in lower_part:
+            city_candidate = "Warszawa"
+            break
 
-            if not street_candidate.lower().startswith("ul.") and not street_candidate.lower().startswith("os."):
-                street_candidate = f"ul. {street_candidate}"
+    # Clean the street name variable by removing explicit words like "ulica" if duplicated
+    clean_street = re.sub(r'^(ul\.|ulica|os\.|osiedle)\s+', '', street_candidate, flags=re.IGNORECASE)
 
-            structured_query = {
-                "street": street_candidate,
-                "city": city_candidate,
-                "country": "Poland"
-            }
-            
-            location = geolocator.geocode(structured_query, timeout=10)
-            if location:
-                return float(location.latitude), float(location.longitude)
+    # =========================================================================
+    # STRATEGY 1: Strict Structured Query (with 'ul.' prefix forced)
+    # =========================================================================
+    try:
+        structured_query_1 = {
+            "street": f"ul. {clean_street}",
+            "city": city_candidate,
+            "country": "Poland"
+        }
+        location = geolocator.geocode(structured_query_1, timeout=10)
+        if location:
+            return float(location.latitude), float(location.longitude)
     except Exception:
         pass
 
+    # =========================================================================
+    # STRATEGY 2: Broad Structured Query (raw street name without prefixes)
+    # =========================================================================
     try:
-        location = geolocator.geocode(address_string, timeout=10)
+        structured_query_2 = {
+            "street": clean_street,
+            "city": city_candidate,
+            "country": "Poland"
+        }
+        location = geolocator.geocode(structured_query_2, timeout=10)
+        if location:
+            return float(location.latitude), float(location.longitude)
+    except Exception:
+        pass
+
+    # =========================================================================
+    # STRATEGY 3: Cleaned Flat String Fallback (strips intermediate district noise)
+    # =========================================================================
+    try:
+        flat_string_fallback = f"ul. {clean_street}, {city_candidate}, Poland"
+        location = geolocator.geocode(flat_string_fallback, timeout=10)
         if location:
             return float(location.latitude), float(location.longitude)
     except Exception:
