@@ -100,9 +100,7 @@ def intelligent_scraper(url: str):
 
 # 3. ADVANCED PRODUCTION CLOUD GEOCODING ENGINE
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v3")
-    
-    # Strategy 1: Attempt raw lookup
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v4")
     try:
         location = geolocator.geocode(address_string, timeout=10)
         if location:
@@ -110,11 +108,9 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
         
-    # Strategy 2: Fallback fallback layout (If the address string is too long or cluttered, strip it to City)
     try:
         if "," in address_string:
             parts = address_string.split(",")
-            # Extract the last two major segments (usually neighborhood, city)
             fallback_address = ", ".join([p.strip() for p in parts[-2:]])
             location = geolocator.geocode(fallback_address, timeout=10)
             if location:
@@ -124,168 +120,207 @@ def get_coordinates(address_string: str):
         
     return None, None
 
-# --- STREAMLIT USER INTERFACE CONFIGURATION ---
-st.set_page_config(layout="wide")
-st.title("🏡 Property Evaluation & History Tracker")
+# --- STREAMLIT PAGE SETUP ---
+st.set_page_config(layout="wide", page_title="Property Evaluation Hub")
+st.title("🏡 Property Hub Tracker Workspace")
 
-col1, col2 = st.columns([1, 1])
+# --- CREATE TABS TO ACT AS SEPARATE LIVE PAGES ---
+tab_scraped, tab_map_view = st.tabs(["📊 Parser & Evaluator", "🗺️ Portfolio Map Explorer"])
 
-with col1:
-    st.subheader("Step 1: Parse Listing URL")
-    default_url = "https://www.otodom.pl/pl/oferta/2m-narozny-taras-komorka-lok-miejsca-post-tylko-u-nas-ID4ByvR"
-    target_url = st.text_input("Property URL Link:", value=default_url)
-    
-    if st.button("Analyze with Intelligent Parsing"):
-        if target_url:
-            with st.spinner("Scanning webpage metadata elements..."):
-                extracted = intelligent_scraper(target_url)
-                if extracted:
-                    lat, lon = get_coordinates(extracted.address)
-                    
-                    st.session_state["scraped_cache"] = {
-                        "url": target_url,
-                        "title": extracted.title,
-                        "address": extracted.address,
-                        "price": extracted.price,
-                        "area": extracted.area,
-                        "rooms": extracted.rooms,
-                        "floor": extracted.floor,
-                        "year_built": extracted.year_built,
-                        "description": extracted.description,
-                        "latitude": lat,
-                        "longitude": lon
-                    }
-                    st.success("Web metadata extraction complete!")
-        else:
-            st.warning("Please input a valid listing link.")
+# =========================================================================
+# PAGE WORKSPACE 1: PARSER & EVALUATOR
+# =========================================================================
+with tab_scraped:
+    col1, col2 = st.columns([1, 1])
 
-    if "scraped_cache" in st.session_state:
-        cache = st.session_state["scraped_cache"]
-        st.markdown("---")
-        st.subheader("Step 2: Self-Input & Data Enrichment")
+    with col1:
+        st.subheader("Step 1: Parse Listing URL")
+        default_url = "https://www.otodom.pl/pl/oferta/2m-narozny-taras-komorka-lok-miejsca-post-tylko-u-nas-ID4ByvR"
+        target_url = st.text_input("Property URL Link:", value=default_url, key="input_target_url")
         
-        st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True)
-        st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True)
-        st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True)
-        
-        # --- GEOCODING DEBUG INSPECTOR VISUAL BOX ---
-        if cache["latitude"] and cache["longitude"]:
-            st.success(f"📍 Location Found Successfully! Found coordinates: {cache['latitude']}, {cache['longitude']}")
-        else:
-            st.error("⚠️ Geocoding Warning: The map provider couldn't read this specific address layout. This record will save, but won't generate a pin icon.")
-        
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-        with metric_col1:
-            st.text_input("Area (m²):", value=cache["area"], disabled=True)
-        with metric_col2:
-            st.text_input("Rooms:", value=cache["rooms"], disabled=True)
-        with metric_col3:
-            st.text_input("Floor:", value=cache["floor"], disabled=True)
-        with metric_col4:
-            st.text_input("Year Built:", value=cache["year_built"], disabled=True)
-        
-        st.markdown("### Your Custom Input Evaluation Metrics")
-        user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.")
-        user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5)
-        current_status = st.selectbox("Pipeline Track Status:", ["Interested", "Viewing Arranged", "Offer Submitted", "Archived"])
-        
-        if st.button("Commit This Record Version to Database"):
-            now_iso = datetime.utcnow().isoformat() + "Z"
+        if st.button("Analyze with Intelligent Parsing", key="btn_run_scraper"):
+            if target_url:
+                with st.spinner("Scanning webpage metadata elements..."):
+                    extracted = intelligent_scraper(target_url)
+                    if extracted:
+                        lat, lon = get_coordinates(extracted.address)
+                        
+                        st.session_state["scraped_cache"] = {
+                            "url": target_url,
+                            "title": extracted.title,
+                            "address": extracted.address,
+                            "price": extracted.price,
+                            "area": extracted.area,
+                            "rooms": extracted.rooms,
+                            "floor": extracted.floor,
+                            "year_built": extracted.year_built,
+                            "description": extracted.description,
+                            "latitude": lat,
+                            "longitude": lon
+                        }
+                        st.success("Web metadata extraction complete!")
+            else:
+                st.warning("Please input a valid listing link.")
+
+        if "scraped_cache" in st.session_state:
+            cache = st.session_state["scraped_cache"]
+            st.markdown("---")
+            st.subheader("Step 2: Self-Input & Data Enrichment")
             
-            try:
-                existing_check = supabase.table("properties")\
-                    .select("id")\
-                    .eq("url", cache["url"])\
-                    .eq("is_current", True)\
-                    .execute()
-                
-                if existing_check.data:
-                    old_record_id = existing_check.data[0]["id"]
-                    supabase.table("properties")\
-                        .update({"is_current": False, "valid_to": now_iso})\
-                        .eq("id", old_record_id)\
-                        .execute()
-                
-                property_payload = {
-                    "url": cache["url"],
-                    "title": cache["title"],
-                    "address": cache["address"],
-                    "price": cache["price"],
-                    "area": cache["area"],
-                    "rooms": cache["rooms"],
-                    "floor": cache["floor"],
-                    "year_built": cache["year_built"],
-                    "my_notes": user_notes,
-                    "rating": user_rating,
-                    "status": current_status,
-                    "valid_from": now_iso,
-                    "is_current": True,
-                    "latitude": cache["latitude"],  
-                    "longitude": cache["longitude"]
-                }
-                
-                supabase.table("properties").insert(property_payload).execute()
-                st.success("Successfully logged property entry version parameters!")
-                del st.session_state["scraped_cache"]
-                st.rerun()
-                
-            except Exception as database_error:
-                st.error(f"Failed to log entry into database table: {database_error}")
-
-with col2:
-    st.subheader("Tracking Ledger Grid & Interactive Location Map")
-    
-    try:
-        db_query = supabase.table("properties").select("*").execute()
-        properties_list = db_query.data
-    except Exception as query_error:
-        properties_list = []
-
-    st.write("### Active Property Pins")
-    
-    wroclaw_center = [51.1079, 17.0385]
-    folium_map = folium.Map(location=wroclaw_center, zoom_start=12, control_scale=True)
-    
-    if properties_list:
-        df_all = pd.DataFrame(properties_list)
-        df_current = df_all[df_all["is_current"] == True]
-        
-        if "latitude" in df_current.columns and "longitude" in df_current.columns:
-            # Drop entries where coordinates are missing or explicitly NaN
-            df_valid_pins = df_current.dropna(subset=['latitude', 'longitude'])
+            st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True, key="field_title")
+            st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True, key="field_price")
+            st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True, key="field_address")
             
-            for _, row in df_valid_pins.iterrows():
+            if cache["latitude"] and cache["longitude"]:
+                st.success(f"📍 Location Found! Ready to drop coordinate pin on the portfolio explorer.")
+            else:
+                st.error("⚠️ Geocoding Warning: Map provider couldn't parse this exact address layout text. It will log to index table cleanly, but won't hold a map point pin.")
+            
+            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+            with metric_col1:
+                st.text_input("Area (m²):", value=cache["area"], disabled=True, key="field_area")
+            with metric_col2:
+                st.text_input("Rooms:", value=cache["rooms"], disabled=True, key="field_rooms")
+            with metric_col3:
+                st.text_input("Floor:", value=cache["floor"], disabled=True, key="field_floor")
+            with metric_col4:
+                st.text_input("Year Built:", value=cache["year_built"], disabled=True, key="field_year")
+            
+            st.markdown("### Your Custom Input Evaluation Metrics")
+            user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.", key="field_notes")
+            user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating")
+            current_status = st.selectbox("Pipeline Track Status:", ["Interested", "Viewing Arranged", "Offer Submitted", "Archived"], key="field_status")
+            
+            if st.button("Commit This Record Version to Database", key="btn_commit_db"):
+                now_iso = datetime.utcnow().isoformat() + "Z"
+                
                 try:
-                    # Enforce strict float translation to prevent serialization failures
-                    lat_val = float(row['latitude'])
-                    lon_val = float(row['longitude'])
+                    existing_check = supabase.table("properties")\
+                        .select("id")\
+                        .eq("url", cache["url"])\
+                        .eq("is_current", True)\
+                        .execute()
                     
-                    popup_text = f"<b>{row['title']}</b><br>Price: {row['price']}<br>Rating: {row['rating']}/10"
+                    if existing_check.data:
+                        old_record_id = existing_check.data[0]["id"]
+                        supabase.table("properties")\
+                            .update({"is_current": False, "valid_to": now_iso})\
+                            .eq("id", old_record_id)\
+                            .execute()
+                    
+                    property_payload = {
+                        "url": cache["url"],
+                        "title": cache["title"],
+                        "address": cache["address"],
+                        "price": cache["price"],
+                        "area": cache["area"],
+                        "rooms": cache["rooms"],
+                        "floor": cache["floor"],
+                        "year_built": cache["year_built"],
+                        "my_notes": user_notes,
+                        "rating": user_rating,
+                        "status": current_status,
+                        "valid_from": now_iso,
+                        "is_current": True,
+                        "latitude": cache["latitude"],  
+                        "longitude": cache["longitude"]
+                    }
+                    
+                    supabase.table("properties").insert(property_payload).execute()
+                    st.success("Successfully logged property entry version parameters!")
+                    del st.session_state["scraped_cache"]
+                    st.rerun()
+                    
+                except Exception as database_error:
+                    st.error(f"Failed to log entry into database table: {database_error}")
+
+    with col2:
+        st.subheader("Active Current Track Records Index")
+        try:
+            db_query = supabase.table("properties").select("*").execute()
+            properties_list = db_query.data
+        except Exception:
+            properties_list = []
+
+        if properties_list:
+            df_all = pd.DataFrame(properties_list)
+            df_current = df_all[df_all["is_current"] == True]
+            
+            if not df_current.empty:
+                display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]
+                existing_cols = [c for c in display_columns if c in df_current.columns]
+                st.dataframe(df_current[existing_cols].sort_values(by="rating", ascending=False), use_container_width=True)
+                
+            st.markdown("---")
+            st.write("### Complete Audit Timeline (SCD Type 2 History)")
+            df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False])
+            st.dataframe(df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]], use_container_width=True)
+        else:
+            st.info("No records present in your tracking ledger index yet.")
+
+# =========================================================================
+# PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER (FRESH FULL WIDE VIEW)
+# =========================================================================
+with tab_map_view:
+    st.subheader("🗺️ Global Saved Portfolio Location Tracker")
+    st.markdown("This view compiles every active, high-priority property version securely locked within your database, pinning geographic coordinates live across your region.")
+
+    try:
+        db_query_map = supabase.table("properties").select("*").execute()
+        map_properties = db_query_map.data
+    except Exception:
+        map_properties = []
+
+    # 1. GENERATE BASE FULL-WIDTH MAP LAYER
+    wroclaw_center_view = [51.1079, 17.0385]
+    folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
+    
+    saved_pins_count = 0
+    
+    if map_properties:
+        df_map_all = pd.DataFrame(map_properties)
+        df_map_current = df_map_all[df_map_all["is_current"] == True]
+        
+        if "latitude" in df_map_current.columns and "longitude" in df_map_current.columns:
+            df_pins_to_render = df_map_current.dropna(subset=['latitude', 'longitude'])
+            
+            for _, row in df_pins_to_render.iterrows():
+                try:
+                    lat_coord = float(row['latitude'])
+                    lon_coord = float(row['longitude'])
+                    
+                    # Custom popup detailing evaluation aspects conversations
+                    html_popup_markup = f"""
+                    <div style='font-family: Arial, sans-serif; min-width: 200px;'>
+                        <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
+                        <b>Price:</b> {row['price']}<br>
+                        <b>Rating Score:</b> ⭐ {row['rating']}/10<br>
+                        <b>Pipeline Status:</b> <span style='color:green;'>{row['status']}</span><br>
+                        <b>Personal Notes:</b> <i>{row['my_notes']}</i>
+                    </div>
+                    """
+                    
                     folium.Marker(
-                        location=[lat_val, lon_val],
-                        popup=folium.Popup(popup_text, max_width=300),
-                        icon=folium.Icon(color="blue", icon="home")
-                    ).add_to(folium_map)
+                        location=[lat_coord, lon_coord],
+                        popup=folium.Popup(html_popup_markup, max_width=350),
+                        icon=folium.Icon(color="red" if row['rating'] >= 8 else "blue", icon="home")
+                    ).add_to(folium_explorer_map)
+                    
+                    saved_pins_count += 1
                 except Exception:
                     continue
 
-    st_folium(folium_map, use_container_width=True, height=400, key="main_property_map")
+    # Renders full container frame spanning across your layout interface panel width
+    st_folium(folium_explorer_map, use_container_width=True, height=550, key="fullscreen_portfolio_map")
+    st.caption(f"Showing **{saved_pins_count}** active property pin points dropping into database coordinates tracking indexes.")
 
-    st.markdown("---")
-
-    if properties_list:
-        df_all = pd.DataFrame(properties_list)
-        df_current = df_all[df_all["is_current"] == True]
-        
-        st.write("### Active Current Track Records Index")
-        if not df_current.empty:
-            display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]
-            existing_cols = [c for c in display_columns if c in df_current.columns]
-            st.dataframe(df_current[existing_cols].sort_values(by="rating", ascending=False), use_container_width=True)
-            
+    # 2. COMPACT PORTFOLIO LEDGER READOUT AT BASE OF MAP PAGE
+    if map_properties:
         st.markdown("---")
-        st.write("### Complete Audit Timeline (SCD Type 2 History)")
-        df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False])
-        st.dataframe(df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]], use_container_width=True)
-    else:
-        st.info("No records present in your tracking ledger index yet.")
+        st.subheader("📋 Explorer Quick-Reference Index")
+        df_map_all = pd.DataFrame(map_properties)
+        df_map_current = df_map_all[df_map_all["is_current"] == True]
+        
+        display_columns_map = ["rating", "status", "price", "title", "my_notes", "area", "address"]
+        existing_cols_map = [c for c in display_columns_map if c in df_map_current.columns]
+        st.dataframe(df_map_current[existing_cols_map].sort_values(by="rating", ascending=False), use_container_width=True)
