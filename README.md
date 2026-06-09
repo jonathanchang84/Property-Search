@@ -21,14 +21,7 @@ This application is a real-time property pipeline tracking and metadata ingestio
 * **Batch Processing Fleet:** Supports concurrent processing of multiple asset listing links uploaded via a CSV file source or pasted directly into a batch input queue.
 * **Staging Inspection Deck:** Extracted rows are routed into an intermediate staging grid where parameter variations can be adjusted, audited, or pruned prior to database commitment.
 
----
 
-## Technical Architecture
-
-* **Frontend Framework:** Streamlit
-* **Database Layer:** Supabase (PostgreSQL engine tracking temporal versioning via `is_current`, `valid_from`, and `valid_to` horizons)
-* **Parsing Engine:** BeautifulSoup4 (HTML structural hunting) and Google GenAI API (`gemini-2.5-flash` with fallback to `gemini-2.0-flash` utilizing structured Pydantic schema generation)
-* **Geospatial Processing:** Geopy (Nominatim location resolution with structured district fallback logic)
 
 ---
 
