@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from google import genai
-from google.genai import types
+from google.google_genai import types
 from pydantic import BaseModel, Field
 from geopy.geocoders import Nominatim
 from supabase import create_client
@@ -76,7 +76,6 @@ def clean_floor_value(floor_str: str) -> str:
     normalized = floor_str.strip().lower()
     if normalized in ["ground", "parter", "0"]:
         return "Ground"
-    # Extract only the numbers from string variations
     numeric_match = re.sub(r'\D+', '', normalized)
     return numeric_match if numeric_match else floor_str
 
@@ -194,18 +193,15 @@ def deterministic_bulk_api_scraper(url: str):
                 price_val = str(target_map.get("Price", "0"))
                 area_val = str(target_map.get("Area", "0"))
                 
-                # --- FIXED STRATEGIC NESTED LOCATION LOOKUP ---
                 labels = ad_data.get("location", {}).get("labels", [])
                 if labels:
                     address_parts = []
                     for item in labels:
-                        # Extract labels sequentially: e.g. "st. Zaporozhye", "Krzyki", "Wrocław"
                         part_label = item.get("label")
                         if part_label and part_label not in address_parts:
                             address_parts.append(part_label)
                     address = ", ".join(address_parts)
                 else:
-                    # Fallback mapping context tracking variant if labels collection payload isn't populated
                     address = ad_data.get("location", {}).get("address", {}).get("value", "Wrocław, Poland")
                 
                 def extract_target_char(key_name, default="Unknown"):
@@ -214,7 +210,6 @@ def deterministic_bulk_api_scraper(url: str):
                         return str(val[0])
                     return str(val) if val else default
 
-                # Dynamic cleanup rules ensuring "floor_10" handles transform conversions cleanly
                 rooms = extract_target_char("Rooms_num", "1")
                 floor = clean_floor_value(extract_target_char("Floor_no", "Ground"))
                 floors = clean_floor_value(extract_target_char("Building_floors_num", "Unknown"))
@@ -226,7 +221,6 @@ def deterministic_bulk_api_scraper(url: str):
                     "description": description
                 }
 
-        # REGEX BACKUP PIPELINE
         page_html = response.text
         title_match = re.search(r'"title"\s*:\s*"([^"]+)"', page_html)
         price_match = re.search(r'"value"\s*:\s*([0-9\s]+),[^}]*"__typename"\s*:\s*"Price"', page_html) or re.search(r'"Price"\s*:\s*\[\s*"([0-9.]+)"', page_html)
@@ -603,6 +597,8 @@ with tab_map_view:
             if selected_title:
                 selected_row = df_current[df_current["title"] == selected_title].iloc[0]
                 with st.expander(f"Modifier Panel: {selected_title[:30]}...", expanded=True):
+                    # --- FIXED: INLINE EDITABLE ADDRESS MODIFIER PANEL FIELD ---
+                    edit_address = st.text_input("Property Address:", value=str(selected_row["address"]))
                     edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)))
                     edit_rating = st.slider("Property Rating Metric (1-10):", min_value=1, max_value=10, value=int(selected_row.get("rating", 5)))
                     edit_status = st.selectbox("Status:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(selected_row["status"]))
@@ -611,11 +607,26 @@ with tab_map_view:
                     
                     if st.button("Save Changes Directly to Record", key="btn_save_inline_map"):
                         try:
+                            # Re-run geo lookup automatically if the address got manually adjusted
+                            if edit_address != selected_row["address"]:
+                                with st.spinner("Resolving coordinates for new address input..."):
+                                    new_lat, new_lon = get_coordinates(edit_address)
+                            else:
+                                new_lat = selected_row.get("latitude")
+                                new_lon = selected_row.get("longitude")
+                                
                             supabase.table("properties").update({
-                                "ranking": edit_ranking, "rating": edit_rating, "status": edit_status,
-                                "price": edit_price, "my_notes": edit_notes
+                                "address": edit_address,
+                                "latitude": new_lat,
+                                "longitude": new_lon,
+                                "ranking": edit_ranking, 
+                                "rating": edit_rating, 
+                                "status": edit_status,
+                                "price": edit_price, 
+                                "my_notes": edit_notes
                             }).eq("id", selected_row["id"]).execute()
-                            st.success("Record updated successfully!")
+                            
+                            st.success("Record parameters updated and re-mapped successfully!")
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as update_err:
@@ -715,13 +726,11 @@ with tab_bulk_parser:
             else:
                 st.error("Extraction failed to resolve listing fields. Confirm that target addresses remain active.")
 
-    # --- ENHANCED FORM DRIVEN INSPECTION DECK WORKFLOW ---
     if "bulk_staging_dataframe" in st.session_state and not st.session_state["bulk_staging_dataframe"].empty:
         st.markdown("---")
         st.subheader("📋 Temporary Staging Inspection Deck")
         st.caption("Verify and edit fields directly in this grid before committing them permanently to Supabase.")
         
-        # Wrapped inside a clean form block context layout to avoid premature re-runs
         with st.form("staging_inspection_form_deck"):
             staged_df_editor = st.data_editor(
                 st.session_state["bulk_staging_dataframe"],
@@ -751,10 +760,8 @@ with tab_bulk_parser:
             
             form_col1, form_col2 = st.columns([1, 4])
             with form_col1:
-                # Dedicated Form Action Trigger
                 apply_changes = st.form_submit_button("💾 Apply Grid Modifications")
 
-        # Process mutations only when button is explicitly clicked
         if apply_changes:
             grid_state = st.session_state.get("bulk_staging_active_grid")
             if grid_state:
@@ -779,7 +786,6 @@ with tab_bulk_parser:
                     time.sleep(0.5)
                     st.rerun()
 
-        # Database Sync Fleet Action Buttons Panel
         commit_col1, commit_col2 = st.columns([1, 4])
         with commit_col1:
             if st.button("🚀 Commit All to Database", key="btn_commit_bulk_to_supabase_fleet"):
