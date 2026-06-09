@@ -96,7 +96,7 @@ def extract_address_from_map_tag(soup: BeautifulSoup) -> str:
             
     return None
 
-# HELPER: Integrity and Availability Scanner Engine
+# HELPER: Integrity, Availability, and Revival Scanner Engine
 def check_property_availability(url: str) -> str:
     """
     Scans a property page for explicit signs of listing expiration.
@@ -108,7 +108,6 @@ def check_property_availability(url: str) -> str:
         }
         response = requests.get(url.strip(), headers=headers, timeout=10)
         
-        # Safe catch if listing is completely deleted or throwing errors
         if response.status_code == 404:
             return "No Longer Available"
         if response.status_code != 200:
@@ -116,7 +115,7 @@ def check_property_availability(url: str) -> str:
             
         soup = BeautifulSoup(response.text, "html.parser")
         
-        # Strategy A: Target specific target signature tag
+        # Strategy A: Target specific deactivation banner signature
         target_span = soup.find("span", class_=lambda c: c and "css-5ujp2z" in c and "etuedte2" in c)
         if target_span and "To ogłoszenie jest już niedostępne" in target_span.get_text():
             return "No Longer Available"
@@ -138,9 +137,14 @@ def intelligent_scraper(url: str):
         soup = BeautifulSoup(response.text, "html.parser")
         discovered_address = extract_address_from_map_tag(soup)
         
+        # Look for the deactivation banner to pass this context to the AI or log it
+        has_deactivation_banner = "To ogłoszenie jest już niedostępne" in response.text
+        
         extracted_chunks = []
         if discovered_address:
             extracted_chunks.append(f"[Verified Map Address Tag]: {discovered_address}")
+        if has_deactivation_banner:
+            extracted_chunks.append("[Listing Availability Status Indicator]: To ogłoszenie jest już niedostępne")
         
         container_elements = soup.find_all(attrs={"data-sentry-element": "Container"})
         for container in container_elements:
@@ -211,12 +215,12 @@ def intelligent_scraper(url: str):
                     raise model_error
                     
         if ai_response:
-            return ai_response.parsed
-        return None
+            return ai_response.parsed, has_deactivation_banner
+        return None, False
         
     except Exception as e:
         st.error(f"Gemini API Error: {e}")
-        return None
+        return None, False
 
 # --- BULK PROCESSING NON-AI API SCRAPER ENGINE ---
 def deterministic_bulk_api_scraper(url: str):
@@ -338,17 +342,33 @@ with tab_scraped:
         if st.button("Analyze with Intelligent Parsing", key="btn_run_scraper"):
             if target_url:
                 with st.spinner("Scanning webpage metadata elements with AI..."):
-                    extracted = intelligent_scraper(target_url)
+                    extracted, is_banner_found = intelligent_scraper(target_url)
                     if extracted:
                         lat, lon = get_coordinates(extracted.address)
                         numeric_price = clean_monetary_value(extracted.price)
+                        
+                        # Fetch current database status to see if it was previously marked as unavailable
+                        inferred_status = "Interested"
+                        try:
+                            existing_rec = supabase.table("properties").select("status").eq("url", target_url).eq("is_current", True).execute()
+                            if existing_rec.data:
+                                current_db_status = existing_rec.data[0]["status"]
+                                # If it was unavailable, but banner is gone -> Revive it to Interested
+                                if current_db_status == "No Longer Available" and not is_banner_found:
+                                    inferred_status = "Interested"
+                                    st.info("🔄 This property was previously marked as 'No Longer Available', but it appears to be back on the market! Status reset to 'Interested'.")
+                                else:
+                                    inferred_status = "No Longer Available" if is_banner_found else current_db_status
+                        except Exception:
+                            if is_banner_found:
+                                inferred_status = "No Longer Available"
                         
                         st.session_state["scraped_cache"] = {
                             "url": target_url, "title": extracted.title, "address": extracted.address,
                             "price": numeric_price, "area": extracted.area, "rooms": extracted.rooms,
                             "floor": clean_floor_value(extracted.floor), "floors": clean_floor_value(extracted.floors),
                             "year_built": extracted.year_built, "description": extracted.description,
-                            "latitude": lat, "longitude": lon
+                            "latitude": lat, "longitude": lon, "status": inferred_status
                         }
                         st.success("Web metadata extraction complete!")
             else:
@@ -389,7 +409,10 @@ with tab_scraped:
             st.markdown("### Your Custom Input Evaluation Metrics")
             user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.", key="field_notes")
             user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating")
-            current_status = st.selectbox("Pipeline Track Status:", STATUS_OPTIONS, key="field_status")
+            
+            # Dynamically default to the cached inferred status (handling auto-revival)
+            status_index = STATUS_OPTIONS.index(cache["status"]) if cache["status"] in STATUS_OPTIONS else 0
+            current_status = st.selectbox("Pipeline Track Status:", STATUS_OPTIONS, index=status_index, key="field_status")
             
             if st.button("Commit This Record Version to Database", key="btn_commit_db"):
                 now_iso = datetime.utcnow().isoformat() + "Z"
@@ -433,16 +456,17 @@ with tab_map_view:
         if "is_current" in df_all.columns:
             df_current = df_all[df_all["is_current"] == True].copy()
 
-    # SYSTEM ADMINISTRATIVE HUB: AUTOMATED STATUS HEALTH CHECKS
+    # SYSTEM ADMINISTRATIVE HUB: AUTOMATED STATUS HEALTH & REVIVAL CHECKS
     with st.expander("🛠️ Workspace Pipeline Maintenance Tools", expanded=False):
-        st.markdown("#### Automated Integrity Check Console")
-        st.caption("Pings all active database tracking records to identify listings that have been deactivated or unlisted.")
+        st.markdown("#### Automated Integrity & Revival Console")
+        st.caption("Pings all database tracking records to update expired links or automatically resurrect properties that came back on the market.")
         
-        if st.button("🚀 Scan Portfolio Tracking for Expired Listings", key="btn_run_integrity_check"):
+        if st.button("🚀 Scan Portfolio Tracking for Status Changes", key="btn_run_integrity_check"):
             if not df_current.empty:
                 scan_progress_bar = st.progress(0)
                 scan_status_text = st.empty()
                 deactivated_counter = 0
+                revived_counter = 0
                 
                 active_records_list = df_current.to_dict(orient="records")
                 total_records_count = len(active_records_list)
@@ -450,21 +474,23 @@ with tab_map_view:
                 for index, record in enumerate(active_records_list):
                     scan_status_text.text(f"Scanning target entity {index+1}/{total_records_count}: {record['title'][:40]}...")
                     
-                    # Ignore checking properties already flagged as unavailable to optimize requests
-                    if record["status"] == "No Longer Available":
-                        scan_progress_bar.progress((index + 1) / total_records_count)
-                        continue
-                        
                     current_availability = check_property_availability(record["url"])
                     
-                    if current_availability == "No Longer Available":
+                    # Scenario 1: Property was active, but is now closed/expired
+                    if current_availability == "No Longer Available" and record["status"] != "No Longer Available":
                         try:
-                            supabase.table("properties").update({
-                                "status": "No Longer Available"
-                            }).eq("id", record["id"]).execute()
+                            supabase.table("properties").update({"status": "No Longer Available"}).eq("id", record["id"]).execute()
                             deactivated_counter += 1
                         except Exception as e:
                             st.error(f"Database write exception on record {record['id']}: {e}")
+                            
+                    # Scenario 2: Property was dead, but has been re-listed / back on market
+                    elif current_availability == "Active" and record["status"] == "No Longer Available":
+                        try:
+                            supabase.table("properties").update({"status": "Interested"}).eq("id", record["id"]).execute()
+                            revived_counter += 1
+                        except Exception as e:
+                            st.error(f"Database revival exception on record {record['id']}: {e}")
                             
                     scan_progress_bar.progress((index + 1) / total_records_count)
                     time.sleep(0.2)  # Defensive throttling
@@ -472,12 +498,18 @@ with tab_map_view:
                 scan_status_text.empty()
                 scan_progress_bar.empty()
                 
-                if deactivated_counter > 0:
-                    st.success(f"Sync integration complete! Flagged **{deactivated_counter}** dead references to 'No Longer Available'.")
-                    time.sleep(1)
+                # Report summary findings back to the workflow context
+                if deactivated_counter > 0 or revived_counter > 0:
+                    summary_msg = "Sync integration complete! "
+                    if deactivated_counter > 0:
+                        summary_msg += f"Flagged 🔴 **{deactivated_counter}** expired links to 'No Longer Available'. "
+                    if revived_counter > 0:
+                        summary_msg += f"Resurrected 🟢 **{revived_counter}** listings back to 'Interested' status!"
+                    st.success(summary_msg)
+                    time.sleep(1.5)
                     st.rerun()
                 else:
-                    st.info("All scanned portfolio URL indexes currently remain open and operational.")
+                    st.info("Scan complete. No status anomalies or market returns detected.")
             else:
                 st.warning("No tracking contexts present inside the data array to check.")
 
@@ -544,7 +576,7 @@ with tab_map_view:
                 html_popup_markup = f"""
                 <div style='font-family: Arial, sans-serif; min-width: 250px;'>
                     <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
-                    <b><b>⭐ Ranking:</b> {int(row.get('ranking', 0))}<br>
+                    <b>⭐ Ranking:</b> {int(row.get('ranking', 0))}<br>
                     <b>📊 Rating:</b> {int(row.get('rating', 5))}/10<br>
                     <b>📍 Address:</b> {row['address']}<br>
                     <b>📐 Area Size:</b> {row['area']}<br>
