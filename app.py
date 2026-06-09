@@ -8,6 +8,8 @@ from geopy.geocoders import Nominatim
 from supabase import create_client
 import pandas as pd
 import time
+import folium
+from streamlit_folium import st_folium
 from datetime import datetime
 
 # --- INITIALIZE DATABASE CONNECTION ---
@@ -33,8 +35,6 @@ def intelligent_scraper(url: str):
         response = requests.get(url, headers=headers, timeout=10)
         
         soup = BeautifulSoup(response.text, "html.parser")
-        
-        # Isolate element structures containing 'data-sentry-element' attributes
         targeted_elements = soup.find_all(lambda tag: tag.has_attr('data-sentry-element'))
         
         extracted_chunks = []
@@ -101,14 +101,12 @@ def intelligent_scraper(url: str):
 # 3. PRODUCTION CLOUD GEOCODING ENGINE
 def get_coordinates(address_string: str):
     try:
-        # Running live on Linux cloud containers bypasses local operating system certificate issues natively
-        geolocator = Nominatim(user_agent="property_tracker_hub_live_production")
+        geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v2")
         location = geolocator.geocode(address_string, timeout=10)
         if location:
-            return location.latitude, location.longitude
+            return float(location.latitude), float(location.longitude)
         return None, None
     except Exception as e:
-        st.warning(f"Geocoding note: Address coordinates could not be computed on this version. ({e})")
         return None, None
 
 # --- STREAMLIT USER INTERFACE CONFIGURATION ---
@@ -124,10 +122,9 @@ with col1:
     
     if st.button("Analyze with Intelligent Parsing"):
         if target_url:
-            with st.spinner("Scanning webpage metadata elements and calculating geographic point placement..."):
+            with st.spinner("Scanning webpage metadata elements..."):
                 extracted = intelligent_scraper(target_url)
                 if extracted:
-                    # Capture exact latitude and longitude live
                     lat, lon = get_coordinates(extracted.address)
                     
                     st.session_state["scraped_cache"] = {
@@ -143,7 +140,7 @@ with col1:
                         "latitude": lat,
                         "longitude": lon
                     }
-                    st.success("Web metadata extraction and geocoding complete!")
+                    st.success("Web metadata extraction complete!")
         else:
             st.warning("Please input a valid listing link.")
 
@@ -152,7 +149,6 @@ with col1:
         st.markdown("---")
         st.subheader("Step 2: Self-Input & Data Enrichment")
         
-        # --- LOCKED EXTRACTED PARAMETERS (READ-ONLY) ---
         st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True)
         st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True)
         st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True)
@@ -167,7 +163,6 @@ with col1:
         with metric_col4:
             st.text_input("Year Built:", value=cache["year_built"], disabled=True)
         
-        # --- EDITABLE CUSTOM USER INPUT FIELDS ---
         st.markdown("### Your Custom Input Evaluation Metrics")
         user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.")
         user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5)
@@ -177,7 +172,6 @@ with col1:
             now_iso = datetime.utcnow().isoformat() + "Z"
             
             try:
-                # --- SCD TYPE 2 VERSION MANAGEMENT LOGIC ---
                 existing_check = supabase.table("properties")\
                     .select("id")\
                     .eq("url", cache["url"])\
@@ -205,7 +199,7 @@ with col1:
                     "status": current_status,
                     "valid_from": now_iso,
                     "is_current": True,
-                    "latitude": cache["latitude"],  # Commit coordinates to DB
+                    "latitude": cache["latitude"],  
                     "longitude": cache["longitude"]
                 }
                 
@@ -224,25 +218,44 @@ with col2:
         db_query = supabase.table("properties").select("*").execute()
         properties_list = db_query.data
     except Exception as query_error:
-        st.error(f"Could not reach database table connection: {query_error}")
         properties_list = []
 
+    st.write("### Active Property Pins")
+    
+    # --- HARDCODED BASE INTERACTIVE FOLIUM MAP OBJECT ---
+    # This renders an absolute HTML map container window centered on Wrocław
+    wroclaw_center = [51.1079, 17.0385]
+    folium_map = folium.Map(location=wroclaw_center, zoom_start=12, control_scale=True)
+    
+    # Inject database pins into the folium map frame
     if properties_list:
         df_all = pd.DataFrame(properties_list)
         df_current = df_all[df_all["is_current"] == True]
         
-        # --- RE-INTEGRATED INTERACTIVE MAP VISUALIZATION ---
-        st.write("### Active Property Pins")
         if "latitude" in df_current.columns and "longitude" in df_current.columns:
-            df_map_pins = df_current.dropna(subset=['latitude', 'longitude'])
-            if not df_map_pins.empty:
-                st.map(df_map_pins[['latitude', 'longitude']], zoom=12)
-            else:
-                st.info("No active properties contain valid positioning coordinates yet.")
-        else:
-            st.info("Map indexing columns are initializing across data fields.")
+            df_valid_pins = df_current.dropna(subset=['latitude', 'longitude'])
             
-        st.markdown("---")
+            for _, row in df_valid_pins.iterrows():
+                try:
+                    popup_text = f"<b>{row['title']}</b><br>Price: {row['price']}<br>Rating: {row['rating']}/10"
+                    folium.Marker(
+                        location=[float(row['latitude']), float(row['longitude'])],
+                        popup=folium.Popup(popup_text, max_width=300),
+                        icon=folium.Icon(color="blue", icon="home")
+                    ).add_to(folium_map)
+                except Exception:
+                    continue
+
+    # Cleanly deploy the standalone map window container onto the screen frame
+    st_folium(folium_map, use_container_width=True, height=400, key="main_property_map")
+
+    st.markdown("---")
+
+    # --- LISTINGS TABLES DATA VIEW ---
+    if properties_list:
+        df_all = pd.DataFrame(properties_list)
+        df_current = df_all[df_all["is_current"] == True]
+        
         st.write("### Active Current Track Records Index")
         if not df_current.empty:
             display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]

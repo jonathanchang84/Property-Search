@@ -7,3 +7,5 @@ geopy
 supabase
 pandas
 certifi
+folium
+streamlit-folium
