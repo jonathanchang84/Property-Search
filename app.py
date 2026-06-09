@@ -58,12 +58,25 @@ def intelligent_scraper(url: str):
         response = requests.get(url, headers=headers, timeout=10)
         
         soup = BeautifulSoup(response.text, "html.parser")
-        targeted_elements = soup.find_all(lambda tag: tag.has_attr('data-sentry-element'))
         
         extracted_chunks = []
+        
+        # --- ENHANCEMENT: Look for high-level container attributes first to catch top-of-page addresses ---
+        container_elements = soup.find_all(attrs={"data-sentry-element": "Container"})
+        for container in container_elements:
+            container_text = container.get_text(strip=True)
+            # If the text block looks like a location header sequence, cache it early
+            if any(city in container_text for city in ["Wrocław", "Kraków", "Warszawa"]):
+                extracted_chunks.append(f"[Header Location Container]: {container_text}")
+        
+        # Pull standard targeted specifications elements
+        targeted_elements = soup.find_all(lambda tag: tag.has_attr('data-sentry-element'))
         for element in targeted_elements:
             element_type = element['data-sentry-element']
             element_text = element.get_text(strip=True)
+            # Skip repeating the generic Container dumps unless they contain critical text
+            if element_type == "Container" and len(element_text) > 300:
+                continue
             if element_text:
                 extracted_chunks.append(f"[{element_type}]: {element_text}")
                 
@@ -85,6 +98,9 @@ def intelligent_scraper(url: str):
         You are an expert real estate data engineer. Carefully read the text below, which contains 
         structured element tags extracted from a property listing. 
         Analyze the key parameters and fill out the required schema details flawlessly.
+        
+        Look closely for an explicit location text snippet or a '[Header Location Container]' value 
+        to extract the cleanest available geographical hierarchy.
         
         Extracted Elements & Content:
         {clean_text}
@@ -126,11 +142,9 @@ def get_coordinates(address_string: str):
     geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v14")
     address_string = address_string.strip("'\" []")
     
-    # Extract structural chunks safely
     parts = [p.strip() for p in address_string.split(",")] if "," in address_string else [address_string]
     street_candidate = parts[0]
     
-    # Deduce the city anchor
     city_candidate = "Wrocław"
     for part in parts:
         lower_part = part.lower()
@@ -144,12 +158,9 @@ def get_coordinates(address_string: str):
             city_candidate = "Warszawa"
             break
 
-    # Clean the street name variable by removing explicit words like "ulica" if duplicated
     clean_street = re.sub(r'^(ul\.|ulica|os\.|osiedle)\s+', '', street_candidate, flags=re.IGNORECASE)
 
-    # =========================================================================
     # STRATEGY 1: Strict Structured Query (with 'ul.' prefix forced)
-    # =========================================================================
     try:
         structured_query_1 = {
             "street": f"ul. {clean_street}",
@@ -162,9 +173,7 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
 
-    # =========================================================================
     # STRATEGY 2: Broad Structured Query (raw street name without prefixes)
-    # =========================================================================
     try:
         structured_query_2 = {
             "street": clean_street,
@@ -177,9 +186,7 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
 
-    # =========================================================================
     # STRATEGY 3: Cleaned Flat String Fallback (strips intermediate district noise)
-    # =========================================================================
     try:
         flat_string_fallback = f"ul. {clean_street}, {city_candidate}, Poland"
         location = geolocator.geocode(flat_string_fallback, timeout=10)
@@ -204,7 +211,7 @@ with tab_scraped:
 
     with col1:
         st.subheader("Step 1: Parse Listing URL")
-        default_url = "https://www.otodom.pl/pl/oferta/2m-narozny-taras-komorka-lok-miejsca-post-tylko-u-nas-ID4ByvR"
+        default_url = "https://www.otodom.pl/pl/oferta/okazja-3-pokoje-2-balkony-krzyki-ID4AN0H"
         target_url = st.text_input("Property URL Link:", value=default_url, key="input_target_url")
         
         if st.button("Analyze with Intelligent Parsing", key="btn_run_scraper"):
@@ -239,7 +246,6 @@ with tab_scraped:
             
             st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True, key="field_title")
             
-            # --- CONVERTED TO INTERACTIVE MONETARY NUMBER INPUT FIELD ---
             price_input = st.number_input(
                 "Base Property Price (zł):", 
                 min_value=0.0, 
@@ -277,7 +283,6 @@ with tab_scraped:
             with metric_col4:
                 st.text_input("Year Built:", value=cache["year_built"], disabled=True, key="field_year")
             
-            # --- MONETARY AMENDMENT VALUE FIELDS ---
             st.markdown("### 💰 Additional Transaction Outlays (Numeric Polish Złoty)")
             cost_col1, cost_col2 = st.columns(2)
             with cost_col1:
@@ -311,7 +316,7 @@ with tab_scraped:
                         "url": cache["url"],
                         "title": cache["title"],
                         "address": cache["address"],
-                        "price": price_input,           # Pushing clean numerical float to DB
+                        "price": price_input,           
                         "area": cache["area"],
                         "rooms": cache["rooms"],
                         "floor": cache["floor"],
