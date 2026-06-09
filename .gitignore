@@ -1,0 +1,12 @@
+# Streamlit secrets and API keys
+secrets.toml
+.env
+
+# Python virtual environment folder
+venv/
+__pycache__/
+*.pyc
+
+# Operating system files
+.DS_Store
+Thumbs.db
