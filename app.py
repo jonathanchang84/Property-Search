@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from google import genai
-from google.genai import types  # <-- FIXED: Corrected import path to prevent ModuleNotFoundError
+from google.genai import types 
 from pydantic import BaseModel, Field
 from geopy.geocoders import Nominatim
 from supabase import create_client
@@ -79,6 +79,25 @@ def clean_floor_value(floor_str: str) -> str:
     numeric_match = re.sub(r'\D+', '', normalized)
     return numeric_match if numeric_match else floor_str
 
+# HELPER: Specific Map Tag Address Extractor
+def extract_address_from_map_tag(soup: BeautifulSoup) -> str:
+    """
+    Targets the unique map anchor tag to reliably extract the address string.
+    """
+    # Strategy A: Target by href targeting the map anchor
+    map_anchor = soup.find("a", href=lambda href: href and "#map" in href)
+    if map_anchor and map_anchor.get_text(strip=True):
+        return map_anchor.get_text(strip=True)
+        
+    # Strategy B: Hard fallback via regular expression on the raw HTML for the specified class signature
+    match = re.search(r'class="css-132xyjm\s+ecsiqhb3"[^>]*>(.*?)</a>', str(soup))
+    if match:
+        clean_match = re.sub('<[^<]+?>', '', match.group(1)).strip()
+        if clean_match:
+            return clean_match
+            
+    return None
+
 # 2. INTELLIGENT SCRAPER TARGETING METADATA ATTRIBUTES (TAB 1 USE CASE)
 def intelligent_scraper(url: str):
     try:
@@ -86,7 +105,13 @@ def intelligent_scraper(url: str):
         response = requests.get(url, headers=headers, timeout=10)
         
         soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Pull the specific address using the new anchor tag strategy
+        discovered_address = extract_address_from_map_tag(soup)
+        
         extracted_chunks = []
+        if discovered_address:
+            extracted_chunks.append(f"[Verified Map Address Tag]: {discovered_address}")
         
         container_elements = soup.find_all(attrs={"data-sentry-element": "Container"})
         for container in container_elements:
@@ -121,6 +146,8 @@ def intelligent_scraper(url: str):
         You are an expert real estate data engineer. Carefully read the text below, which contains 
         structured element tags extracted from a property listing. 
         Analyze the key parameters and fill out the required schema details flawlessly.
+        
+        CRITICAL NOTE: If a '[Verified Map Address Tag]' is present, prioritize that exact text for the address field.
         
         Extracted Elements & Content:
         {clean_text}
@@ -165,8 +192,8 @@ def intelligent_scraper(url: str):
 # --- BULK PROCESSING NON-AI API SCRAPER ENGINE ---
 def deterministic_bulk_api_scraper(url: str):
     """
-    Scrapes listing properties without an AI layer by locating the frontend 
-    hydration JSON state injected into the page window script attributes.
+    Scrapes listing properties without an AI layer by utilizing direct 
+    address tag tracking alongside frontend hydration elements.
     """
     try:
         headers = {
@@ -179,8 +206,11 @@ def deterministic_bulk_api_scraper(url: str):
             return None
             
         soup = BeautifulSoup(response.text, "html.parser")
-        target_script = soup.find("script", id="__NEXT_DATA__")
         
+        # Resolve address immediately using the direct HTML signature discovered
+        address = extract_address_from_map_tag(soup)
+        
+        target_script = soup.find("script", id="__NEXT_DATA__")
         if target_script and target_script.string:
             raw_json = json.loads(target_script.string)
             ad_data = raw_json.get("props", {}).get("pageProps", {}).get("ad", {})
@@ -193,16 +223,18 @@ def deterministic_bulk_api_scraper(url: str):
                 price_val = str(target_map.get("Price", "0"))
                 area_val = str(target_map.get("Area", "0"))
                 
-                labels = ad_data.get("location", {}).get("labels", [])
-                if labels:
-                    address_parts = []
-                    for item in labels:
-                        part_label = item.get("label")
-                        if part_label and part_label not in address_parts:
-                            address_parts.append(part_label)
-                    address = ", ".join(address_parts)
-                else:
-                    address = ad_data.get("location", {}).get("address", {}).get("value", "Wrocław, Poland")
+                # If the map element parsing did not extract an address text, fall back to historical scripts
+                if not address:
+                    labels = ad_data.get("location", {}).get("labels", [])
+                    if labels:
+                        address_parts = []
+                        for item in labels:
+                            part_label = item.get("label")
+                            if part_label and part_label not in address_parts:
+                                address_parts.append(part_label)
+                        address = ", ".join(address_parts)
+                    else:
+                        address = ad_data.get("location", {}).get("address", {}).get("value", "Wrocław, Poland")
                 
                 def extract_target_char(key_name, default="Unknown"):
                     val = target_map.get(key_name)
@@ -221,6 +253,7 @@ def deterministic_bulk_api_scraper(url: str):
                     "description": description
                 }
 
+        # Flat markup parsing script fallback fallback 
         page_html = response.text
         title_match = re.search(r'"title"\s*:\s*"([^"]+)"', page_html)
         price_match = re.search(r'"value"\s*:\s*([0-9\s]+),[^}]*"__typename"\s*:\s*"Price"', page_html) or re.search(r'"Price"\s*:\s*\[\s*"([0-9.]+)"', page_html)
@@ -231,7 +264,7 @@ def deterministic_bulk_api_scraper(url: str):
         area = area_match.group(1) if area_match else "0"
         
         return {
-            "url": url, "title": title, "address": "Wrocław, Poland", "price": price,
+            "url": url, "title": title, "address": address if address else "Wrocław, Poland", "price": price,
             "area": area, "rooms": "3", "floor": "2", "floors": "3", "year_built": "Unknown",
             "description": ""
         }
