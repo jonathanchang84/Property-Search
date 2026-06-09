@@ -33,7 +33,7 @@ class PropertyDetails(BaseModel):
 def clean_monetary_value(value_str: str) -> float:
     if not value_str:
         return 0.0
-    cleaned = re.sub(r'[^\d.,]', '', value_str)
+    cleaned = re.sub(r'[^\d.,]', '', str(value_str))
     if not cleaned:
         return 0.0
     if ',' in cleaned and '.' in cleaned:
@@ -41,6 +41,24 @@ def clean_monetary_value(value_str: str) -> float:
     elif ',' in cleaned:
         parts = cleaned.split(',')
         if len(parts[-1]) == 2:  
+            cleaned = cleaned.replace(',', '.')
+        else:
+            cleaned = cleaned.replace(',', '')
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+# HELPER: Clean Numerical Area Extraction Engine
+def clean_area_value(area_str: str) -> float:
+    if not area_str:
+        return 0.0
+    cleaned = re.sub(r'[^\d.,]', '', str(area_str))
+    if ',' in cleaned and '.' in cleaned:
+        cleaned = cleaned.replace(',', '')
+    elif ',' in cleaned:
+        parts = cleaned.split(',')
+        if len(parts[-1]) == 2:
             cleaned = cleaned.replace(',', '.')
         else:
             cleaned = cleaned.replace(',', '')
@@ -132,7 +150,7 @@ def intelligent_scraper(url: str):
 
 # 3. ROBUST HYPER-RESILIENT GEOCODING ENGINE WITH DISTRICT FALLBACK
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v15")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v16")
     address_string = address_string.strip("'\" []")
     
     parts = [p.strip() for p in address_string.split(",")] if "," in address_string else [address_string]
@@ -153,7 +171,6 @@ def get_coordinates(address_string: str):
 
     clean_street = re.sub(r'^(ul\.|ulica|os\.|osiedle)\s+', '', street_candidate, flags=re.IGNORECASE)
 
-    # STRATEGY 1: Strict Structured Query (with 'ul.' prefix forced)
     try:
         structured_query_1 = {
             "street": f"ul. {clean_street}",
@@ -166,7 +183,6 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
 
-    # STRATEGY 2: Broad Structured Query (raw street name without prefixes)
     try:
         structured_query_2 = {
             "street": clean_street,
@@ -179,7 +195,6 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
 
-    # STRATEGY 3: Cleaned Flat String Fallback
     try:
         flat_string_fallback = f"ul. {clean_street}, {city_candidate}, Poland"
         location = geolocator.geocode(flat_string_fallback, timeout=10)
@@ -188,11 +203,7 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
 
-    # =========================================================================
-    # STRATEGY 4: Area/District Center Fallback (For listings with no exact street)
-    # =========================================================================
     try:
-        # Search the district directly within the city limits
         district_query = f"{clean_street}, {city_candidate}, Poland"
         location = geolocator.geocode(district_query, timeout=10)
         if location:
@@ -272,7 +283,6 @@ with tab_scraped:
                 cache["latitude"] = new_lat
                 cache["longitude"] = new_lon
 
-            # --- MAP COORDINATE INSPECTION BANNER ---
             if cache["latitude"] and cache["longitude"]:
                 st.success(f"✅ Map Match Found! Coordinates resolved to: {cache['latitude']}, {cache['longitude']}")
             else:
@@ -345,49 +355,85 @@ with tab_scraped:
                 except Exception as database_error:
                     st.error(f"Failed to log entry into database table: {database_error}")
 
-with col2:
-    st.subheader("Active Current Track Records Index")
-    try:
-        db_query = supabase.table("properties").select("*").execute()
-        properties_list = db_query.data
-    except Exception:
-        properties_list = []
+    with col2:
+        st.subheader("Active Current Track Records Index")
+        try:
+            db_query = supabase.table("properties").select("*").execute()
+            properties_list = db_query.data
+        except Exception:
+            properties_list = []
 
-    if properties_list:
-        df_all = pd.DataFrame(properties_list)
-        df_current = df_all[df_all["is_current"] == True].copy()
-        
-        if not df_current.empty:
-            df_current["price"] = pd.to_numeric(df_current["price"], errors='coerce').fillna(0.0)
-            df_current["garage_cost"] = pd.to_numeric(df_current["garage_cost"], errors='coerce').fillna(0.0)
-            df_current["storage_cost"] = pd.to_numeric(df_current["storage_cost"], errors='coerce').fillna(0.0)
-            df_current["Total Outlay"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
+        if properties_list:
+            df_all = pd.DataFrame(properties_list)
+            df_current = df_all[df_all["is_current"] == True].copy()
             
-            display_columns = ["rating", "title", "price", "garage_cost", "storage_cost", "Total Outlay", "status", "my_notes", "area", "rooms", "floor", "address"]
-            existing_cols = [c for c in display_columns if c in df_current.columns]
-            
+            if not df_current.empty:
+                # Core validation maps to clear database fields safely
+                df_current["price"] = pd.to_numeric(df_current["price"], errors='coerce').fillna(0.0)
+                df_current["garage_cost"] = pd.to_numeric(df_current["garage_cost"], errors='coerce').fillna(0.0)
+                df_current["storage_cost"] = pd.to_numeric(df_current["storage_cost"], errors='coerce').fillna(0.0)
+                df_current["numeric_area"] = df_current["area"].apply(clean_area_value)
+                
+                # Math transformations
+                df_current["Cost per m²"] = df_current.apply(
+                    lambda r: r["price"] / r["numeric_area"] if r["numeric_area"] > 0 else 0.0, axis=1
+                )
+                df_current["Total Cost"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
+                
+                # FORCE STRICT SYSTEM FIELD ORDER
+                ordered_columns = [
+                    "id", "title", "address", "area", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
+                ]
+                df_display = df_current[ordered_columns].copy()
+                df_display = df_display.sort_values(by="title", ascending=True)
+
+                # RENDER INTERACTIVE SYSTEM DATA GRIDS
+                edited_df = st.data_editor(
+                    df_display,
+                    column_config={
+                        "id": None, # Hidden structural primary keys
+                        "title": st.column_config.TextColumn("Title", disabled=True),
+                        "address": st.column_config.TextColumn("Address", disabled=True),
+                        "area": st.column_config.TextColumn("Area", disabled=True),
+                        "status": st.column_config.SelectboxColumn("Status", options=["Interested", "Viewing Arranged", "Offer Submitted", "Archived"], disabled=False),
+                        "price": st.column_config.NumberColumn("Base Price", format="%.2f zł", disabled=False),
+                        "Cost per m²": st.column_config.NumberColumn("Cost per m²", format="%.2f zł", disabled=True),
+                        "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł", disabled=False),
+                        "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł", disabled=False),
+                        "Total Cost": st.column_config.NumberColumn("Total Cost", format="%.2f zł", disabled=True),
+                        "my_notes": st.column_config.TextColumn("My Notes", disabled=False),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    key="portfolio_interactive_editor"
+                )
+
+                # INTERACTIVE SYNC WRITER
+                if st.session_state.get("portfolio_interactive_editor") and st.session_state["portfolio_interactive_editor"]["edited_rows"]:
+                    changes_detected = st.session_state["portfolio_interactive_editor"]["edited_rows"]
+                    
+                    for row_idx_str, updated_fields in changes_detected.items():
+                        row_idx = int(row_idx_str)
+                        record_id = df_display.iloc[row_idx]["id"]
+                        
+                        try:
+                            supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
+                        except Exception as e:
+                            st.error(f"Failed to synchronize table changes: {e}")
+                    
+                    st.rerun()
+                
+            st.markdown("---")
+            st.write("### Complete Audit Timeline (SCD Type 2 History)")
+            df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False]).copy()
+            df_sorted["price"] = pd.to_numeric(df_sorted["price"], errors='coerce').fillna(0.0)
             st.dataframe(
-                df_current[existing_cols].sort_values(by="rating", ascending=False),
-                column_config={
-                    "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
-                    "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł"),
-                    "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł"),
-                    "Total Outlay": st.column_config.NumberColumn("Total Budget Outlay", format="%.2f zł"),
-                },
+                df_sorted[["url", "price", "status", "is_current", "valid_from"]],
+                column_config={"price": st.column_config.NumberColumn("Price Level History", format="%.2f zł")},
                 use_container_width=True
             )
-            
-        st.markdown("---")
-        st.write("### Complete Audit Timeline (SCD Type 2 History)")
-        df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False]).copy()
-        df_sorted["price"] = pd.to_numeric(df_sorted["price"], errors='coerce').fillna(0.0)
-        st.dataframe(
-            df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]],
-            column_config={"price": st.column_config.NumberColumn("Price Level History", format="%.2f zł")},
-            use_container_width=True
-        )
-    else:
-        st.info("No records present in your tracking ledger index yet.")
+        else:
+            st.info("No records present in your tracking ledger index yet.")
 
 # =========================================================================
 # PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER
@@ -451,30 +497,5 @@ with tab_map_view:
                     continue
 
     marker_group.add_to(folium_explorer_map)
-
     st_folium(folium_explorer_map, use_container_width=True, height=550, key=f"fullscreen_map_pins_{saved_pins_count}")
     st.caption(f"Showing **{saved_pins_count}** active property pin points dropping into database coordinates tracking indexes.")
-
-    if map_properties:
-        st.markdown("---")
-        st.subheader("📋 Explorer Quick-Reference Index")
-        df_map_all = pd.DataFrame(map_properties)
-        df_map_current = df_map_all[df_map_all["is_current"] == True].copy()
-        
-        df_map_current["price"] = pd.to_numeric(df_map_current["price"], errors='coerce').fillna(0.0)
-        df_map_current["garage_cost"] = pd.to_numeric(df_map_current["garage_cost"], errors='coerce').fillna(0.0)
-        df_map_current["storage_cost"] = pd.to_numeric(df_map_current["storage_cost"], errors='coerce').fillna(0.0)
-        df_map_current["Total Outlay"] = df_map_current["price"] + df_map_current["garage_cost"] + df_map_current["storage_cost"]
-
-        display_columns_map = ["rating", "status", "price", "garage_cost", "storage_cost", "Total Outlay", "title", "my_notes", "area", "address"]
-        existing_cols_map = [c for c in display_columns_map if c in df_map_current.columns]
-        st.dataframe(
-            df_map_current[existing_cols_map].sort_values(by="rating", ascending=False),
-            column_config={
-                "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
-                "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł"),
-                "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł"),
-                "Total Outlay": st.column_config.NumberColumn("Total Budget Outlay", format="%.2f zł"),
-            },
-            use_container_width=True
-        )
