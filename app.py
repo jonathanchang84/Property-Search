@@ -360,7 +360,8 @@ with tab_scraped:
         try:
             db_query = supabase.table("properties").select("*").execute()
             properties_list = db_query.data
-        except Exception:
+        except Exception as e:
+            st.error(f"Database query error: {e}")
             properties_list = []
 
         if properties_list:
@@ -368,30 +369,36 @@ with tab_scraped:
             df_current = df_all[df_all["is_current"] == True].copy()
             
             if not df_current.empty:
-                # Core validation maps to clear database fields safely
+                # SAFE SCHEMATIC INSULATION: Inject columns if missing from Supabase
+                missing_safety_fields = ["price", "garage_cost", "storage_cost", "my_notes", "status", "title", "address", "area", "id"]
+                for field in missing_safety_fields:
+                    if field not in df_current.columns:
+                        df_current[field] = ""
+                
+                # Format baseline data cleanly
                 df_current["price"] = pd.to_numeric(df_current["price"], errors='coerce').fillna(0.0)
                 df_current["garage_cost"] = pd.to_numeric(df_current["garage_cost"], errors='coerce').fillna(0.0)
                 df_current["storage_cost"] = pd.to_numeric(df_current["storage_cost"], errors='coerce').fillna(0.0)
                 df_current["numeric_area"] = df_current["area"].apply(clean_area_value)
                 
-                # Math transformations
+                # Dynamic calculated fields
                 df_current["Cost per m²"] = df_current.apply(
                     lambda r: r["price"] / r["numeric_area"] if r["numeric_area"] > 0 else 0.0, axis=1
                 )
                 df_current["Total Cost"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
                 
-                # FORCE STRICT SYSTEM FIELD ORDER
-                ordered_columns = [
+                # RIGID COLUMN ORDER SELECTION
+                df_display = df_current[[
                     "id", "title", "address", "area", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
-                ]
-                df_display = df_current[ordered_columns].copy()
+                ]].copy()
+                
                 df_display = df_display.sort_values(by="title", ascending=True)
 
                 # RENDER INTERACTIVE SYSTEM DATA GRIDS
                 edited_df = st.data_editor(
                     df_display,
                     column_config={
-                        "id": None, # Hidden structural primary keys
+                        "id": None, # Hidden structural primary key
                         "title": st.column_config.TextColumn("Title", disabled=True),
                         "address": st.column_config.TextColumn("Address", disabled=True),
                         "area": st.column_config.TextColumn("Area", disabled=True),
@@ -408,7 +415,7 @@ with tab_scraped:
                     key="portfolio_interactive_editor"
                 )
 
-                # INTERACTIVE SYNC WRITER
+                # SYNC EDITS BACK TO SUPABASE
                 if st.session_state.get("portfolio_interactive_editor") and st.session_state["portfolio_interactive_editor"]["edited_rows"]:
                     changes_detected = st.session_state["portfolio_interactive_editor"]["edited_rows"]
                     
