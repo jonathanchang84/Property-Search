@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from google import genai
-from google.google_genai import types
+from google.genai import types  # <-- FIXED: Corrected import path to prevent ModuleNotFoundError
 from pydantic import BaseModel, Field
 from geopy.geocoders import Nominatim
 from supabase import create_client
@@ -597,7 +597,6 @@ with tab_map_view:
             if selected_title:
                 selected_row = df_current[df_current["title"] == selected_title].iloc[0]
                 with st.expander(f"Modifier Panel: {selected_title[:30]}...", expanded=True):
-                    # --- FIXED: INLINE EDITABLE ADDRESS MODIFIER PANEL FIELD ---
                     edit_address = st.text_input("Property Address:", value=str(selected_row["address"]))
                     edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)))
                     edit_rating = st.slider("Property Rating Metric (1-10):", min_value=1, max_value=10, value=int(selected_row.get("rating", 5)))
@@ -607,7 +606,6 @@ with tab_map_view:
                     
                     if st.button("Save Changes Directly to Record", key="btn_save_inline_map"):
                         try:
-                            # Re-run geo lookup automatically if the address got manually adjusted
                             if edit_address != selected_row["address"]:
                                 with st.spinner("Resolving coordinates for new address input..."):
                                     new_lat, new_lon = get_coordinates(edit_address)
