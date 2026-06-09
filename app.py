@@ -20,7 +20,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # 1. SPECIFIC SPECIFICATION BLUEPRINT FOR GEMINI EXTRACTION
 class PropertyDetails(BaseModel):
     title: str = Field(description="The main headline or title of the property listing")
-    address: str = Field(description="The full physical address of the property, including city and country if available")
+    address: str = Field(description="A clean, map-friendly address format. Example: 'ul. Popowicka, Wrocław, Poland'. Strip away specific apartment or block numbers, keep only street, city, and country.")
     price: str = Field(description="The listed price, including the currency symbol")
     area: str = Field(description="The total area/surface size of the property in square meters (m²)")
     rooms: str = Field(description="The number of rooms in the property")
@@ -63,6 +63,12 @@ def intelligent_scraper(url: str):
         structured element tags extracted from a property listing. 
         Analyze the key parameters and fill out the required schema details flawlessly.
         
+        CRITICAL RULE FOR ADDRESS FORMATTING:
+        Look at the location elements. You must output the address string in a standard layout 
+        that a mapping geocoding service can locate immediately. 
+        Format it strictly as: [Street Name/Neighborhood], [City], Poland.
+        Do NOT include room numbers, apartment identifiers, or local descriptors.
+        
         Extracted Elements & Content:
         {clean_text}
         """
@@ -98,9 +104,11 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. ADVANCED PRODUCTION CLOUD GEOCODING ENGINE
+# 3. ADVANCED CLOUD GEOCODING ENGINE
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v4")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v5")
+    
+    # Try the raw extracted layout first
     try:
         location = geolocator.geocode(address_string, timeout=10)
         if location:
@@ -108,6 +116,7 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
         
+    # Fallback layout: clear everything except final components if too complex
     try:
         if "," in address_string:
             parts = address_string.split(",")
@@ -124,7 +133,6 @@ def get_coordinates(address_string: str):
 st.set_page_config(layout="wide", page_title="Property Evaluation Hub")
 st.title("🏡 Property Hub Tracker Workspace")
 
-# --- CREATE TABS TO ACT AS SEPARATE LIVE PAGES ---
 tab_scraped, tab_map_view = st.tabs(["📊 Parser & Evaluator", "🗺️ Portfolio Map Explorer"])
 
 # =========================================================================
@@ -171,10 +179,11 @@ with tab_scraped:
             st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True, key="field_price")
             st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True, key="field_address")
             
+            # --- MAP COORDINATE INSPECTION BANNER ---
             if cache["latitude"] and cache["longitude"]:
-                st.success(f"📍 Location Found! Ready to drop coordinate pin on the portfolio explorer.")
+                st.success(f"✅ Map Match Found! Coordinates resolved to: {cache['latitude']}, {cache['longitude']}")
             else:
-                st.error("⚠️ Geocoding Warning: Map provider couldn't parse this exact address layout text. It will log to index table cleanly, but won't hold a map point pin.")
+                st.error(f"❌ Geocoding Failed! The address string '{cache['address']}' could not be matched on the global index map.")
             
             metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             with metric_col1:
@@ -259,19 +268,17 @@ with tab_scraped:
             st.info("No records present in your tracking ledger index yet.")
 
 # =========================================================================
-# PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER (FRESH FULL WIDE VIEW)
+# PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER
 # =========================================================================
 with tab_map_view:
     st.subheader("🗺️ Global Saved Portfolio Location Tracker")
-    st.markdown("This view compiles every active, high-priority property version securely locked within your database, pinning geographic coordinates live across your region.")
-
+    
     try:
         db_query_map = supabase.table("properties").select("*").execute()
         map_properties = db_query_map.data
     except Exception:
         map_properties = []
 
-    # 1. GENERATE BASE FULL-WIDTH MAP LAYER
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
     
@@ -286,10 +293,12 @@ with tab_map_view:
             
             for _, row in df_pins_to_render.iterrows():
                 try:
+                    if row['latitude'] is None or row['longitude'] is None:
+                        continue
+                        
                     lat_coord = float(row['latitude'])
                     lon_coord = float(row['longitude'])
                     
-                    # Custom popup detailing evaluation aspects conversations
                     html_popup_markup = f"""
                     <div style='font-family: Arial, sans-serif; min-width: 200px;'>
                         <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
@@ -310,11 +319,9 @@ with tab_map_view:
                 except Exception:
                     continue
 
-    # Renders full container frame spanning across your layout interface panel width
     st_folium(folium_explorer_map, use_container_width=True, height=550, key="fullscreen_portfolio_map")
     st.caption(f"Showing **{saved_pins_count}** active property pin points dropping into database coordinates tracking indexes.")
 
-    # 2. COMPACT PORTFOLIO LEDGER READOUT AT BASE OF MAP PAGE
     if map_properties:
         st.markdown("---")
         st.subheader("📋 Explorer Quick-Reference Index")
