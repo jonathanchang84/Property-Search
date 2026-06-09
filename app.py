@@ -170,7 +170,7 @@ def deterministic_bulk_api_scraper(url: str):
             
         soup = BeautifulSoup(response.text, "html.parser")
         
-        # 1. Target the Next.js hydration script tag where Otodom dumps all data
+        # Target the Next.js hydration script tag where Otodom dumps all data
         target_script = soup.find("script", id="__NEXT_DATA__")
         
         if target_script and target_script.string:
@@ -198,7 +198,7 @@ def deterministic_bulk_api_scraper(url: str):
                     "description": description
                 }
 
-        # 2. FALLBACK PATHWAY: If JSON tracking structures are missing, harvest via regex
+        # FALLBACK PATHWAY: If JSON tracking structures are missing, harvest via regex
         page_html = response.text
         
         title_match = re.search(r'"title"\s*:\s*"([^"]+)"', page_html)
@@ -438,7 +438,7 @@ with tab_scraped:
         st.info("💡 Go to the 'Portfolio Map Explorer' tab to apply real-time filtering, cross-examine properties on the map, and edit track details!")
 
 # =========================================================================
-# PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER (THE MASTER CONTROL CENTER)
+# PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER
 # =========================================================================
 with tab_map_view:
     try:
@@ -454,9 +454,7 @@ with tab_map_view:
         if "is_current" in df_all.columns:
             df_current = df_all[df_all["is_current"] == True].copy()
 
-    # --- GLOBAL FILTERS INTERFACE PANEL ---
     st.markdown("### 🔍 Live Portfolio Filter Console")
-    
     filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns([1.0, 1.0, 1.2, 1.1, 1.1])
     df_filtered = pd.DataFrame()
     
@@ -471,11 +469,7 @@ with tab_map_view:
         df_current["Total Cost"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
         
         df_current["rating"] = pd.to_numeric(df_current.get("rating", 5), errors='coerce').fillna(5).astype(int)
-        
-        if "ranking" not in df_current.columns:
-            df_current["ranking"] = 0
-        else:
-            df_current["ranking"] = pd.to_numeric(df_current["ranking"], errors='coerce').fillna(0).astype(int)
+        df_current["ranking"] = pd.to_numeric(df_current.get("ranking", 0), errors='coerce').fillna(0).astype(int)
 
         df_current["title"] = df_current["title"].astype(str).fillna("")
         df_current["address"] = df_current["address"].astype(str).fillna("")
@@ -501,28 +495,13 @@ with tab_map_view:
                 ]
 
         with filter_col3:
-            min_p = float(df_current["Total Cost"].min()) if not df_current.empty else 0.0
             max_p = float(df_current["Total Cost"].max()) if not df_current.empty else 1500000.0
-            if min_p == max_p:
-                max_p += 10000.0
-            
-            budget_range = st.slider(
-                "Filter by Budget (zł):",
-                min_value=0.0,
-                max_value=max_p,
-                value=(0.0, max_p),
-                step=10000.0,
-                format="%d zł"
-            )
+            budget_range = st.slider("Filter by Budget (zł):", min_value=0.0, max_value=max_p, value=(0.0, max_p), step=10000.0, format="%d zł")
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
 
         with filter_col4:
-            min_r = int(df_current["ranking"].min()) if not df_current.empty else 0
             max_r = int(df_current["ranking"].max()) if not df_current.empty else 100
-            if min_r == max_r:
-                max_r = max(min_r + 10, 10)
-                
             ranking_range = st.slider("Filter by Ranking:", min_value=0, max_value=max_r, value=(0, max_r), step=1)
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
@@ -532,7 +511,6 @@ with tab_map_view:
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["rating"] >= rating_range[0]) & (df_filtered["rating"] <= rating_range[1])]
 
-    # --- DYNAMIC SYNCHRONIZED MAP ENGINE ---
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
     marker_group = folium.FeatureGroup(name="Properties")
@@ -552,16 +530,10 @@ with tab_map_view:
                     <b>📊 Rating:</b> {int(row.get('rating', 5))}/10<br>
                     <b>📍 Address:</b> {row['address']}<br>
                     <b>📐 Area Size:</b> {row['area']}<br>
-                    <b>🏢 Structural Level:</b> Floor {row.get('floor', 'N/A')} of {row.get('floors', 'N/A')}<br>
-                    <b>🧱 Year Built:</b> {row.get('year_built', 'N/A')}<br>
                     <b>💰 Base Price:</b> {row['price']:,.2f} zł<br>
-                    <b>📉 Cost per m²:</b> {row['Cost per m²']:,.2f} zł/m²<br>
-                    <b>🚗 Garage Cost:</b> {row['garage_cost']:,.2f} zł<br>
-                    <b>📦 Storage Cost:</b> {row['storage_cost']:,.2f} zł<br>
                     <hr style='margin: 6px 0;'>
                     <b>💳 Total Budget Outlay:</b> <span style='color:#d9534f; font-weight:bold;'>{row['Total Cost']:,.2f} zł</span><br>
-                    <b>🚦 Track Status:</b> <span style='color:green; font-weight:bold;'>{row['status']}</span><br>
-                    <b>📝 My Notes:</b> <i>{row['my_notes']}</i>
+                    <b>🚦 Track Status:</b> <span style='color:green; font-weight:bold;'>{row['status']}</span>
                 </div>
                 """
                 marker_color = "blue"
@@ -581,9 +553,7 @@ with tab_map_view:
 
     marker_group.add_to(folium_explorer_map)
     st_folium(folium_explorer_map, use_container_width=True, height=450, key=f"map_workbench_pins_{saved_pins_count}")
-    st.caption(f"📍 Map outputting **{saved_pins_count}** filtered investment markers.")
 
-    # --- WORKBENCH LAYOUT DATA TABLES & MODIFIER PANELS ---
     if not df_current.empty:
         st.markdown("---")
         edit_layout, grid_layout = st.columns([1, 2])
@@ -595,158 +565,131 @@ with tab_map_view:
             
             if selected_title:
                 selected_row = df_current[df_current["title"] == selected_title].iloc[0]
-                
                 with st.expander(f"Modifier Panel: {selected_title[:30]}...", expanded=True):
-                    edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)), step=1)
-                    edit_rating = st.slider("Property Rating Metric (1-10):", min_value=1, max_value=10, value=int(selected_row.get("rating", 5)), step=1)
+                    edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)))
+                    edit_rating = st.slider("Property Rating Metric (1-10):", min_value=1, max_value=10, value=int(selected_row.get("rating", 5)))
                     edit_status = st.selectbox("Status:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(selected_row["status"]))
-                    edit_price = st.number_input("Base Price (zł):", min_value=0.0, value=float(selected_row["price"]), step=5000.0)
-                    edit_floor = st.text_input("Floor number:", value=str(selected_row.get("floor", "")))
-                    edit_floors = st.text_input("Total building floors:", value=str(selected_row.get("floors", "")))
-                    edit_year = st.text_input("Year Built:", value=str(selected_row.get("year_built", "")))
-                    edit_garage = st.number_input("Garage Cost (zł):", min_value=0.0, value=float(selected_row["garage_cost"]), step=1000.0)
-                    edit_storage = st.number_input("Storage Cost (zł):", min_value=0.0, value=float(selected_row["storage_cost"]), step=500.0)
+                    edit_price = st.number_input("Base Price (zł):", min_value=0.0, value=float(selected_row["price"]))
                     edit_notes = st.text_area("My Notes:", value=str(selected_row["my_notes"]))
                     
                     if st.button("Save Changes Directly to Record", key="btn_save_inline_map"):
-                        update_payload = {
-                            "ranking": edit_ranking,
-                            "rating": edit_rating,
-                            "status": edit_status,
-                            "price": edit_price,
-                            "floor": edit_floor,
-                            "floors": edit_floors,
-                            "year_built": edit_year,
-                            "garage_cost": edit_garage,
-                            "storage_cost": edit_storage,
-                            "my_notes": edit_notes
-                        }
                         try:
-                            supabase.table("properties").update(update_payload).eq("id", selected_row["id"]).execute()
+                            supabase.table("properties").update({
+                                "ranking": edit_ranking, "rating": edit_rating, "status": edit_status,
+                                "price": edit_price, "my_notes": edit_notes
+                            }).eq("id", selected_row["id"]).execute()
                             st.success("Record updated successfully!")
-                            time.sleep(1)
+                            time.sleep(0.5)
                             st.rerun()
                         except Exception as update_err:
                             st.error(f"Failed to push updates: {update_err}")
 
         with grid_layout:
             st.markdown("### 📊 Active Filtered Records Index")
-            
-            ordered_columns = [
-                "id", "ranking", "rating", "title", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"
-            ]
-            
+            ordered_columns = ["id", "ranking", "rating", "title", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"]
             df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
-            for col in ordered_columns:
-                if col not in df_display_source.columns:
-                    if col == "ranking":
-                        df_display_source[col] = 0
-                    elif col == "rating":
-                        df_display_source[col] = 5
-                    else:
-                        df_display_source[col] = ""
-                    
             df_display = df_display_source[ordered_columns].copy().sort_values(by=["ranking", "rating"], ascending=[False, False])
 
-            edited_df = st.data_editor(
+            st.data_editor(
                 df_display,
                 column_config={
-                    "id": None, 
-                    "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1, disabled=False),
-                    "rating": st.column_config.NumberColumn("Rating", min_value=1, max_value=10, step=1, disabled=False),
-                    "title": st.column_config.TextColumn("Title", disabled=True),
-                    "address": st.column_config.TextColumn("Address", disabled=True),
-                    "area": st.column_config.TextColumn("Area", disabled=True),
-                    "floor": st.column_config.TextColumn("Floor", disabled=False),
-                    "floors": st.column_config.TextColumn("Total Floors", disabled=False),
-                    "year_built": st.column_config.TextColumn("Year Built", disabled=False),
-                    "status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS, disabled=False),
-                    "price": st.column_config.NumberColumn("Base Price", format="%.2f zł", disabled=False),
-                    "Cost per m²": st.column_config.NumberColumn("Cost per m²", format="%.2f zł", disabled=True),
-                    "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł", disabled=False),
-                    "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł", disabled=False),
+                    "id": None, "ranking": st.column_config.NumberColumn("Ranking"),
+                    "rating": st.column_config.NumberColumn("Rating"), "title": st.column_config.TextColumn("Title", disabled=True),
+                    "address": st.column_config.TextColumn("Address", disabled=True), "area": st.column_config.TextColumn("Area", disabled=True),
+                    "status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
+                    "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
                     "Total Cost": st.column_config.NumberColumn("Total Cost", format="%.2f zł", disabled=True),
-                    "my_notes": st.column_config.TextColumn("My Notes", disabled=False),
                 },
-                use_container_width=True,
-                hide_index=True,
-                key="map_tab_aligned_data_grid"
+                use_container_width=True, hide_index=True, key="map_tab_aligned_data_grid"
             )
 
             if st.session_state.get("map_tab_aligned_data_grid") and st.session_state["map_tab_aligned_data_grid"]["edited_rows"]:
-                changes_detected = st.session_state["map_tab_aligned_data_grid"]["edited_rows"]
-                
-                for row_idx_str, updated_fields in changes_detected.items():
-                    row_idx = int(row_idx_str)
-                    record_id = df_display.iloc[row_idx]["id"]
-                    
-                    try:
-                        if record_id:
-                            supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
-                    except Exception as e:
-                        st.error(f"Failed to synchronize table changes: {e}")
-                
+                for row_idx_str, updated_fields in st.session_state["map_tab_aligned_data_grid"]["edited_rows"].items():
+                    record_id = df_display.iloc[int(row_idx_str)]["id"]
+                    if record_id:
+                        supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
                 st.rerun()
 
 # =========================================================================
-# PAGE WORKSPACE 3: BULK PARSER (NEW FEATURES CONSOLE)
+# PAGE WORKSPACE 3: BULK PARSER (ENHANCED MULTI-INPUT VERSION)
 # =========================================================================
 with tab_bulk_parser:
     st.subheader("📥 Bulk Property Processing Center")
-    st.markdown("Upload a standard `.csv` file containing Otodom listing links under a column named **`url`**.")
+    st.markdown("Supply Otodom listing links via an explicit file upload or by pasting them directly below.")
     
-    csv_file_handler = st.file_uploader("Choose CSV File Input Source", type=["csv"], key="bulk_csv_file_uploader")
+    # Dual-Input Layout Split Engine
+    input_col1, input_col2 = st.columns(2)
+    target_url_list = []
     
-    if csv_file_handler:
-        try:
-            input_dataframe = pd.read_csv(csv_file_handler)
-            if "url" not in input_dataframe.columns:
-                st.error("❌ The uploaded CSV file must contain a column named exactly **'url'**.")
-            else:
-                target_url_list = input_dataframe["url"].dropna().unique().tolist()
-                st.info(f"📋 Found **{len(target_url_list)}** unique links to evaluate.")
+    with input_col1:
+        csv_file_handler = st.file_uploader("Option A: Choose CSV File Input Source", type=["csv"], key="bulk_csv_file_uploader")
+        if csv_file_handler:
+            try:
+                input_dataframe = pd.read_csv(csv_file_handler)
+                if "url" in input_dataframe.columns:
+                    target_url_list.extend(input_dataframe["url"].dropna().unique().tolist())
+                else:
+                    st.error("❌ CSV file layout missing expected explicit structural header named 'url'.")
+            except Exception as e:
+                st.error(f"Error reading CSV: {e}")
                 
-                if st.button("Execute Non-AI Bulk Parsing Execution", key="btn_run_bulk_processing"):
-                    staged_results_accumulator = []
-                    
-                    processing_progress_bar = st.progress(0)
-                    status_message_placeholder = st.empty()
-                    
-                    for index, active_url in enumerate(target_url_list):
-                        status_message_placeholder.text(f"Parsing item {index+1}/{len(target_url_list)}: {active_url[:50]}...")
-                        
-                        parsed_record = deterministic_bulk_api_scraper(active_url)
-                        if parsed_record:
-                            # Pre-populate custom workbench variables
-                            parsed_record["ranking"] = 0
-                            parsed_record["rating"] = 5
-                            parsed_record["status"] = "Interested"
-                            parsed_record["garage_cost"] = 0.0
-                            parsed_record["storage_cost"] = 0.0
-                            parsed_record["my_notes"] = ""
-                            staged_results_accumulator.append(parsed_record)
-                        
-                        processing_progress_bar.progress((index + 1) / len(target_url_list))
-                        time.sleep(0.2) # Courteous throttling gap delay
-                        
-                    status_message_placeholder.empty()
-                    processing_progress_bar.empty()
-                    
-                    if staged_results_accumulator:
-                        st.session_state["bulk_staging_dataframe"] = pd.DataFrame(staged_results_accumulator)
-                        st.success(f"Successfully processed and staged **{len(staged_results_accumulator)}** properties!")
-                    else:
-                        st.error("No data could be extracted. Please confirm the link strings contain valid IDs.")
-                        
-        except Exception as csv_error:
-            st.error(f"Failed to process the uploaded file format: {csv_error}")
+    with input_col2:
+        text_area_input = st.text_area(
+            "Option B: Paste Multiple URLs Directly", 
+            placeholder="Paste raw links here.\nSeparate multiple items using commas or individual line breaks.",
+            help="Accepts links cleanly isolated via spaces, commas, or line breaks.",
+            key="bulk_text_area_urls"
+        )
+        if text_area_input.strip():
+            # Extract anything resembling an otodom URL block using a clean pattern split
+            extracted_links = re.split(r'[\s,]+', text_area_input)
+            valid_links = [lnk.strip() for lnk in extracted_links if "otodom.pl" in lnk.lower() and lnk.strip()]
+            target_url_list.extend(valid_links)
+
+    # Deduplicate cumulative entries dynamically
+    target_url_list = list(dict.fromkeys(target_url_list))
+
+    if target_url_list:
+        st.info(f"📋 Loaded **{len(target_url_list)}** unique link contexts to parse across combined ingestion methods.")
+        
+        if st.button("Execute Non-AI Bulk Parsing Execution", key="btn_run_bulk_processing"):
+            staged_results_accumulator = []
+            processing_progress_bar = st.progress(0)
+            status_message_placeholder = st.empty()
             
-    # Staging Workbench Review Interface Area
+            for index, active_url in enumerate(target_url_list):
+                status_message_placeholder.text(f"Parsing item {index+1}/{len(target_url_list)}: {active_url[:50]}...")
+                parsed_record = deterministic_bulk_api_scraper(active_url)
+                
+                if parsed_record:
+                    # Enrich layout records with editable default attributes on execution mapping
+                    parsed_record["ranking"] = 0
+                    parsed_record["rating"] = 5
+                    parsed_record["status"] = "Interested"
+                    parsed_record["garage_cost"] = 0.0
+                    parsed_record["storage_cost"] = 0.0
+                    parsed_record["my_notes"] = ""
+                    staged_results_accumulator.append(parsed_record)
+                
+                processing_progress_bar.progress((index + 1) / len(target_url_list))
+                time.sleep(0.2)
+                
+            status_message_placeholder.empty()
+            processing_progress_bar.empty()
+            
+            if staged_results_accumulator:
+                st.session_state["bulk_staging_dataframe"] = pd.DataFrame(staged_results_accumulator)
+                st.success(f"Successfully tracked and parsed **{len(staged_results_accumulator)}** rows inside staging layer.")
+            else:
+                st.error("Extraction failed to resolve listing fields. Confirm that target addresses remain active.")
+
+    # Interactive Staging Deck Panel Section
     if "bulk_staging_dataframe" in st.session_state and not st.session_state["bulk_staging_dataframe"].empty:
         st.markdown("---")
         st.subheader("📋 Temporary Staging Inspection Deck")
-        st.caption("You can verify and edit fields directly in this grid before committing them permanently to Supabase.")
+        st.caption("💡 To drop a property completely before saving, select the row header checkbox and tap the **Trash Can** icon or hit backspace/delete.")
         
+        # Deploy completely dynamic grid settings with row deletion tracking enabled natively
         staged_df_editor = st.data_editor(
             st.session_state["bulk_staging_dataframe"],
             column_config={
@@ -765,21 +708,39 @@ with tab_bulk_parser:
                 "garage_cost": st.column_config.NumberColumn("Garage Cost (zł)", format="%.2f"),
                 "storage_cost": st.column_config.NumberColumn("Storage Cost (zł)", format="%.2f"),
                 "my_notes": st.column_config.TextColumn("My Notes"),
-                "description": None # Hide full string columns to save layout width real estate
+                "description": None
             },
             use_container_width=True,
-            hide_index=True,
+            hide_index=False,
+            num_rows="dynamic",  # Unlocks the dynamic removal tracking layer
             key="bulk_staging_active_grid"
         )
         
-        # Save modifications back to session state structure tracking reference
-        if st.session_state.get("bulk_staging_active_grid") and st.session_state["bulk_staging_active_grid"]["edited_rows"]:
-            for row_idx_str, fields_dict in st.session_state["bulk_staging_active_grid"]["edited_rows"].items():
-                row_idx = int(row_idx_str)
-                for key, val in fields_dict.items():
-                    st.session_state["bulk_staging_dataframe"].iat[row_idx, st.session_state["bulk_staging_dataframe"].columns.get_loc(key)] = val
+        # Core State Synchronization Loop capturing updates and explicit row deletions
+        grid_state = st.session_state.get("bulk_staging_active_grid")
+        if grid_state:
+            has_state_changed = False
+            current_tracked_df = st.session_state["bulk_staging_dataframe"].copy()
+            
+            # Action 1: Handle field edits inline
+            if grid_state["edited_rows"]:
+                for row_idx_str, fields_dict in grid_state["edited_rows"].items():
+                    row_idx = int(row_idx_str)
+                    for key, val in fields_dict.items():
+                        current_tracked_df.iat[row_idx, current_tracked_df.columns.get_loc(key)] = val
+                has_state_changed = True
+                
+            # Action 2: Handle live row deletions instantly
+            if grid_state["deleted_rows"]:
+                indices_to_drop = [int(idx) for idx in grid_state["deleted_rows"]]
+                current_tracked_df = current_tracked_df.drop(indices_to_drop).reset_index(drop=True)
+                has_state_changed = True
+                
+            if has_state_changed:
+                st.session_state["bulk_staging_dataframe"] = current_tracked_df
+                st.rerun()
 
-        # Execution Step 5 Action Panel Trigger
+        # Database Commit & Control Buttons
         commit_col1, commit_col2 = st.columns([1, 4])
         with commit_col1:
             if st.button("🚀 Commit All to Database", key="btn_commit_bulk_to_supabase_fleet"):
@@ -791,51 +752,33 @@ with tab_bulk_parser:
                         try:
                             # Historical versioning cleanups
                             existing_check = supabase.table("properties")\
-                                .select("id")\
-                                .eq("url", row["url"])\
-                                .eq("is_current", True)\
-                                .execute()
+                                .select("id").eq("url", row["url"]).eq("is_current", True).execute()
                             
                             if existing_check.data:
-                                old_record_id = existing_check.data[0]["id"]
                                 supabase.table("properties")\
                                     .update({"is_current": False, "valid_to": now_iso})\
-                                    .eq("id", old_record_id)\
-                                    .execute()
+                                    .eq("id", existing_check.data[0]["id"]).execute()
                             
                             # Geolocation evaluation loop on the fly
                             lat, lon = get_coordinates(row["address"])
                             
                             payload = {
-                                "url": row["url"],
-                                "title": row["title"],
-                                "address": row["address"],
-                                "price": float(row["price"]),
-                                "area": str(row["area"]),
-                                "rooms": str(row["rooms"]),
-                                "floor": str(row["floor"]),
-                                "floors": str(row["floors"]),
-                                "year_built": str(row["year_built"]),
-                                "garage_cost": float(row["garage_cost"]),
-                                "storage_cost": float(row["storage_cost"]),
-                                "my_notes": str(row["my_notes"]),
-                                "rating": int(row["rating"]),
-                                "ranking": int(row["ranking"]),
-                                "status": str(row["status"]),
-                                "valid_from": now_iso,
-                                "is_current": True,
-                                "latitude": lat,
-                                "longitude": lon
+                                "url": row["url"], "title": row["title"], "address": row["address"],
+                                "price": float(row["price"]), "area": str(row["area"]), "rooms": str(row["rooms"]),
+                                "floor": str(row["floor"]), "floors": str(row["floors"]), "year_built": str(row["year_built"]),
+                                "garage_cost": float(row["garage_cost"]), "storage_cost": float(row["storage_cost"]),
+                                "my_notes": str(row["my_notes"]), "rating": int(row["rating"]), "ranking": int(row["ranking"]),
+                                "status": str(row["status"]), "valid_from": now_iso, "is_current": True,
+                                "latitude": lat, "longitude": lon
                             }
-                            
                             supabase.table("properties").insert(payload).execute()
                             success_write_count += 1
                         except Exception as write_err:
                             st.error(f"Failed to log entry row {row['title'][:20]}: {write_err}")
                             
-                    st.success(f"Successfully integrated **{success_write_count}** new entries into your system portfolio!")
+                    st.success(f"Successfully integrated **{success_write_count}** entries into your portfolio!")
                     del st.session_state["bulk_staging_dataframe"]
-                    time.sleep(1)
+                    time.sleep(0.5)
                     st.rerun()
                     
         with commit_col2:
