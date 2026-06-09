@@ -98,16 +98,31 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. PRODUCTION CLOUD GEOCODING ENGINE
+# 3. ADVANCED PRODUCTION CLOUD GEOCODING ENGINE
 def get_coordinates(address_string: str):
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v3")
+    
+    # Strategy 1: Attempt raw lookup
     try:
-        geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v2")
         location = geolocator.geocode(address_string, timeout=10)
         if location:
             return float(location.latitude), float(location.longitude)
-        return None, None
-    except Exception as e:
-        return None, None
+    except Exception:
+        pass
+        
+    # Strategy 2: Fallback fallback layout (If the address string is too long or cluttered, strip it to City)
+    try:
+        if "," in address_string:
+            parts = address_string.split(",")
+            # Extract the last two major segments (usually neighborhood, city)
+            fallback_address = ", ".join([p.strip() for p in parts[-2:]])
+            location = geolocator.geocode(fallback_address, timeout=10)
+            if location:
+                return float(location.latitude), float(location.longitude)
+    except Exception:
+        pass
+        
+    return None, None
 
 # --- STREAMLIT USER INTERFACE CONFIGURATION ---
 st.set_page_config(layout="wide")
@@ -152,6 +167,12 @@ with col1:
         st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True)
         st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True)
         st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True)
+        
+        # --- GEOCODING DEBUG INSPECTOR VISUAL BOX ---
+        if cache["latitude"] and cache["longitude"]:
+            st.success(f"📍 Location Found Successfully! Found coordinates: {cache['latitude']}, {cache['longitude']}")
+        else:
+            st.error("⚠️ Geocoding Warning: The map provider couldn't read this specific address layout. This record will save, but won't generate a pin icon.")
         
         metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
         with metric_col1:
@@ -222,36 +243,36 @@ with col2:
 
     st.write("### Active Property Pins")
     
-    # --- HARDCODED BASE INTERACTIVE FOLIUM MAP OBJECT ---
-    # This renders an absolute HTML map container window centered on Wrocław
     wroclaw_center = [51.1079, 17.0385]
     folium_map = folium.Map(location=wroclaw_center, zoom_start=12, control_scale=True)
     
-    # Inject database pins into the folium map frame
     if properties_list:
         df_all = pd.DataFrame(properties_list)
         df_current = df_all[df_all["is_current"] == True]
         
         if "latitude" in df_current.columns and "longitude" in df_current.columns:
+            # Drop entries where coordinates are missing or explicitly NaN
             df_valid_pins = df_current.dropna(subset=['latitude', 'longitude'])
             
             for _, row in df_valid_pins.iterrows():
                 try:
+                    # Enforce strict float translation to prevent serialization failures
+                    lat_val = float(row['latitude'])
+                    lon_val = float(row['longitude'])
+                    
                     popup_text = f"<b>{row['title']}</b><br>Price: {row['price']}<br>Rating: {row['rating']}/10"
                     folium.Marker(
-                        location=[float(row['latitude']), float(row['longitude'])],
+                        location=[lat_val, lon_val],
                         popup=folium.Popup(popup_text, max_width=300),
                         icon=folium.Icon(color="blue", icon="home")
                     ).add_to(folium_map)
                 except Exception:
                     continue
 
-    # Cleanly deploy the standalone map window container onto the screen frame
     st_folium(folium_map, use_container_width=True, height=400, key="main_property_map")
 
     st.markdown("---")
 
-    # --- LISTINGS TABLES DATA VIEW ---
     if properties_list:
         df_all = pd.DataFrame(properties_list)
         df_current = df_all[df_all["is_current"] == True]
