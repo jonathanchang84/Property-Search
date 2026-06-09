@@ -33,16 +33,14 @@ class PropertyDetails(BaseModel):
 def clean_monetary_value(value_str: str) -> float:
     if not value_str:
         return 0.0
-    # Strip everything except numbers, periods, and commas
     cleaned = re.sub(r'[^\d.,]', '', value_str)
     if not cleaned:
         return 0.0
-    # Handle European comma decimals if present, otherwise treat as thousands separator
     if ',' in cleaned and '.' in cleaned:
         cleaned = cleaned.replace(',', '')
     elif ',' in cleaned:
         parts = cleaned.split(',')
-        if len(parts[-1]) == 2:  # looks like cents/grosze
+        if len(parts[-1]) == 2:  
             cleaned = cleaned.replace(',', '.')
         else:
             cleaned = cleaned.replace(',', '')
@@ -58,23 +56,18 @@ def intelligent_scraper(url: str):
         response = requests.get(url, headers=headers, timeout=10)
         
         soup = BeautifulSoup(response.text, "html.parser")
-        
         extracted_chunks = []
         
-        # --- ENHANCEMENT: Look for high-level container attributes first to catch top-of-page addresses ---
         container_elements = soup.find_all(attrs={"data-sentry-element": "Container"})
         for container in container_elements:
             container_text = container.get_text(strip=True)
-            # If the text block looks like a location header sequence, cache it early
             if any(city in container_text for city in ["Wrocław", "Kraków", "Warszawa"]):
                 extracted_chunks.append(f"[Header Location Container]: {container_text}")
         
-        # Pull standard targeted specifications elements
         targeted_elements = soup.find_all(lambda tag: tag.has_attr('data-sentry-element'))
         for element in targeted_elements:
             element_type = element['data-sentry-element']
             element_text = element.get_text(strip=True)
-            # Skip repeating the generic Container dumps unless they contain critical text
             if element_type == "Container" and len(element_text) > 300:
                 continue
             if element_text:
@@ -137,9 +130,9 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. ROBUST HYPER-RESILIENT GEOCODING LAYERED ENGINE
+# 3. ROBUST HYPER-RESILIENT GEOCODING ENGINE WITH DISTRICT FALLBACK
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v14")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v15")
     address_string = address_string.strip("'\" []")
     
     parts = [p.strip() for p in address_string.split(",")] if "," in address_string else [address_string]
@@ -186,10 +179,22 @@ def get_coordinates(address_string: str):
     except Exception:
         pass
 
-    # STRATEGY 3: Cleaned Flat String Fallback (strips intermediate district noise)
+    # STRATEGY 3: Cleaned Flat String Fallback
     try:
         flat_string_fallback = f"ul. {clean_street}, {city_candidate}, Poland"
         location = geolocator.geocode(flat_string_fallback, timeout=10)
+        if location:
+            return float(location.latitude), float(location.longitude)
+    except Exception:
+        pass
+
+    # =========================================================================
+    # STRATEGY 4: Area/District Center Fallback (For listings with no exact street)
+    # =========================================================================
+    try:
+        # Search the district directly within the city limits
+        district_query = f"{clean_street}, {city_candidate}, Poland"
+        location = geolocator.geocode(district_query, timeout=10)
         if location:
             return float(location.latitude), float(location.longitude)
     except Exception:
