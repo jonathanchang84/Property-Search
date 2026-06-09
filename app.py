@@ -9,7 +9,6 @@ from supabase import create_client
 import pandas as pd
 import time
 import folium
-import re
 from streamlit_folium import st_folium
 from datetime import datetime
 
@@ -21,7 +20,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # 1. SPECIFIC SPECIFICATION BLUEPRINT FOR GEMINI EXTRACTION
 class PropertyDetails(BaseModel):
     title: str = Field(description="The main headline or title of the property listing")
-    address: str = Field(description="The raw address location hierarchy found on the listing webpage.")
+    address: str = Field(description="The full address location hierarchy found on the listing webpage.")
     price: str = Field(description="The listed price, including the currency symbol")
     area: str = Field(description="The total area/surface size of the property in square meters (m²)")
     rooms: str = Field(description="The number of rooms in the property")
@@ -99,52 +98,30 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. ROBUST GEOCODING LOOKUP FEATURING ADDRESS SANITIZATION FILTER
+# 3. ADVANCED GEOPY ENGINE WITH AUTONOMOUS CLEANING FALLBACKS
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v7")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v8")
     
-    # Clean step: If address looks like 'ul. X, District, District, City, Voivodeship', extract Street + City
-    cleaned_address = address_string
+    # Try 1: Try exactly what's inside the text box
     try:
-        if "," in address_string:
-            parts = [p.strip() for p in address_string.split(",")]
-            
-            street = ""
-            city = ""
-            
-            # Identify components by parsing structural markers
-            for part in parts:
-                if part.lower().startswith("ul.") or "osiedle" in part.lower() or "os." in part.lower():
-                    street = part
-                if "wrocław" in part.lower():
-                    city = "Wrocław"
-                elif "kraków" in part.lower():
-                    city = "Kraków"
-                elif "warszawa" in part.lower():
-                    city = "Warszawa"
-            
-            # If street and city components are isolated, reassemble them perfectly
-            if street and city:
-                cleaned_address = f"{street}, {city}, Poland"
-            elif city and len(parts) >= 2:
-                # Fallback layout: Grab first part + city
-                cleaned_address = f"{parts[0]}, {city}, Poland"
-    except Exception:
-        pass
-
-    # Execution Option A: Try clean resolved address layout
-    try:
-        location = geolocator.geocode(cleaned_address, timeout=10)
+        location = geolocator.geocode(address_string, timeout=10)
         if location:
             return float(location.latitude), float(location.longitude)
     except Exception:
         pass
         
-    # Execution Option B: Try raw unchanged layout fallback
+    # Try 2: Simple cleanup strategy (Street, City, Country)
     try:
-        location = geolocator.geocode(address_string, timeout=10)
-        if location:
-            return float(location.latitude), float(location.longitude)
+        if "," in address_string:
+            parts = [p.strip() for p in address_string.split(",")]
+            street = next((p for p in parts if p.lower().startswith("ul.") or "os." in p.lower()), parts[0])
+            city = next((p for p in parts if "wrocław" in p.lower() or "kraków" in p.lower() or "warszawa" in p.lower()), "")
+            
+            if city:
+                fallback = f"{street}, {city}, Poland"
+                location = geolocator.geocode(fallback, timeout=10)
+                if location:
+                    return float(location.latitude), float(location.longitude)
     except Exception:
         pass
         
@@ -198,13 +175,26 @@ with tab_scraped:
             
             st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True, key="field_title")
             st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True, key="field_price")
-            st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True, key="field_address")
             
+            # --- CONVERT ADDRESS FIELD TO EDITABLE DROPDOWN INPUT ENGINE ---
+            user_edited_address = st.text_input(
+                "Property Address (Editable - Clean up this string if map matching fails):", 
+                value=cache["address"], 
+                key="field_address_editable"
+            )
+            
+            # Re-verify layout coordinates if the address text was manually changed
+            if user_edited_address != cache["address"]:
+                new_lat, new_lon = get_coordinates(user_edited_address)
+                cache["address"] = user_edited_address
+                cache["latitude"] = new_lat
+                cache["longitude"] = new_lon
+
             # --- MAP COORDINATE INSPECTION BANNER ---
             if cache["latitude"] and cache["longitude"]:
                 st.success(f"✅ Map Match Found! Coordinates resolved to: {cache['latitude']}, {cache['longitude']}")
             else:
-                st.error(f"❌ Geocoding Failed! The address layout could not be matched on the map index. Try modifying the field above.")
+                st.error("❌ Geocoding Failed! Try shortening the address format directly in the text box above to something simpler like: 'ul. Popowicka, Wrocław, Poland'")
             
             metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             with metric_col1:
