@@ -1,7 +1,57 @@
-# Real Estate Analytics & Evaluation Hub
+# Property Evaluation Hub
 
-This application serves as a dedicated workspace for real estate investment analysis. The platform automates data extraction from primary property listings, manages a persistent tracking matrix, and provides localized spatial insights.
+This application is a real-time property pipeline tracking and metadata ingestion platform designed to parse, aggregate, and monitor real estate listings from Otodom. It integrates advanced metadata extraction via large language models, structured geocoding pipelines, and automated availability synchronization.
 
+---
+
+## Features
+
+### 📊 Parser & Evaluator
+* **Intelligent Metadata Ingestion:** Extracted structural element tags from active listing URLs are analyzed to populate core property attributes (e.g., price, area, room count, floor details, construction year).
+* **Automated Revival Detection:** If a listing previously marked as "No Longer Available" is rescanned and the deactivation banner is no longer present on the webpage, this application automatically resets its operational status back to "Interested."
+* **Data Enrichment:** Financial tracking layers support inputting auxiliary transaction outlays such as individual garage or storage space costs to evaluate a true total budget requirement.
+
+### 🗺️ Portfolio Map Explorer
+* **Geocoded Map Layer:** Validated properties are resolved into latitude and longitude coordinates via an integrated geocoding lookup engine and mapped as spatial data points. Map markers dynamically update color schemes based on performance ratings and track status indicators.
+* **Pipeline Maintenance Tools:** An automated integrity console scans active database rows to look for explicit listing deactivation signatures (`<span class="css-5ujp2z etuedte2">To ogłoszenie jest już niedostępne</span>`).
+  * **Two-Way Status Synchronization:** Properties that have been pulled from the market are transitioned to **"No Longer Available"**. Properties that return to the market have their tracking status resurrected back to **"Interested"**.
+* **Inline Data Grid Editing:** Interactive data grids support immediate modifications to property criteria, metrics, personal notes, and status fields with immediate database write-backs.
+
+### 📥 Bulk Parser
+* **Batch Processing Fleet:** Supports concurrent processing of multiple asset listing links uploaded via a CSV file source or pasted directly into a batch input queue.
+* **Staging Inspection Deck:** Extracted rows are routed into an intermediate staging grid where parameter variations can be adjusted, audited, or pruned prior to database commitment.
+
+
+
+---
+
+## Database Configuration Requirements
+
+This application expects a `properties` table structure configured in Supabase. The required schema fields include:
+
+| Field Name | Data Type | Description |
+| :--- | :--- | :--- |
+| `id` | BigInt / UUID | Primary Key |
+| `url` | Text | Unique source listing link |
+| `title` | Text | Captured headline text |
+| `address` | Text | Resolved location identifier |
+| `price` | Numeric | Base listing currency valuation |
+| `area` | Text / Numeric | Property size in square meters |
+| `rooms` | Text | Total room count |
+| `floor` | Text | Level placement |
+| `floors` | Text | Total structure height |
+| `year_built` | Text | Construction timeframe |
+| `garage_cost` | Numeric | Supplementary parking cost |
+| `storage_cost` | Numeric | Supplementary storage unit cost |
+| `my_notes` | Text | Narrative evaluation logs |
+| `rating` | Integer | Scaled score indicator (1–10) |
+| `ranking` | Integer | Absolute priority pipeline sorting index |
+| `status` | Text | Context state (`Interested`, `No Longer Available`, etc.) |
+| `latitude` | Float | Resolved map coordinate |
+| `longitude` | Float | Resolved map coordinate |
+| `is_current` | Boolean | Active tracking version flag |
+| `valid_from` | Timestamp | Record creation marker |
+| `valid_to` | Timestamp | Deprecation marker for audit history tracking |
 ---
 
 ## 1. Initial Scope
@@ -62,6 +112,7 @@ The application utilizes a decoupled pattern separating the client execution env
 * **Geospatial Processing Hub (GeoPy / Nominatim):** Standardizes local address blocks into specific geographic location pairs (Latitude, Longitude) through sequential structured text processing and recursive city district lookups.
 * **Visualization Layer (Folium):** Embeds custom map markers inside the client viewport, color-coded by performance parameters and state filters.
 * **Data Persistence Layer (Supabase):** Manages a system of record utilizing timestamped version tracking constraints (`is_current`, `valid_from`, `valid_to`) to secure real-time changes made directly inside the user interface panels.
+* * **Parsing Engine:** BeautifulSoup4 (HTML structural hunting) and Google GenAI API (`gemini-2.5-flash` with fallback to `gemini-2.0-flash` utilizing structured Pydantic schema generation)
 
 ### System Topology
 
