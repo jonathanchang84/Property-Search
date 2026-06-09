@@ -98,30 +98,49 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. ADVANCED GEOPY ENGINE WITH AUTONOMOUS CLEANING FALLBACKS
+# 3. UPGRADED STRUCTURED GEOCODING ENGINE (GOOGLE-MAPS STYLE COMPATIBILITY)
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v8")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v9")
     
-    # Try 1: Try exactly what's inside the text box
+    # Strategy 1: Attempt Structured Query Decomposition (Highly robust for complex Polish addresses)
+    try:
+        if "," in address_string:
+            parts = [p.strip() for p in address_string.split(",")]
+            
+            # Extract the street anchor (e.g., 'ul. Popowicka')
+            street_part = next((p for p in parts if p.lower().startswith("ul.") or "os." in p.lower() or "osiedle" in p.lower()), parts[0])
+            
+            # Extract the city anchor
+            city_part = "Wrocław" # Default fallback safety
+            for p in parts:
+                if "wrocław" in p.lower():
+                    city_part = "Wrocław"
+                    break
+                elif "kraków" in p.lower():
+                    city_part = "Kraków"
+                    break
+                elif "warszawa" in p.lower():
+                    city_part = "Warszawa"
+                    break
+            
+            # Build structured dictionary. This bypasses intermediary neighborhood clutter entirely.
+            structured_query = {
+                "street": street_part,
+                "city": city_part,
+                "country": "Poland"
+            }
+            
+            location = geolocator.geocode(structured_query, timeout=10)
+            if location:
+                return float(location.latitude), float(location.longitude)
+    except Exception:
+        pass
+
+    # Strategy 2: Global Raw String Fallback Layout
     try:
         location = geolocator.geocode(address_string, timeout=10)
         if location:
             return float(location.latitude), float(location.longitude)
-    except Exception:
-        pass
-        
-    # Try 2: Simple cleanup strategy (Street, City, Country)
-    try:
-        if "," in address_string:
-            parts = [p.strip() for p in address_string.split(",")]
-            street = next((p for p in parts if p.lower().startswith("ul.") or "os." in p.lower()), parts[0])
-            city = next((p for p in parts if "wrocław" in p.lower() or "kraków" in p.lower() or "warszawa" in p.lower()), "")
-            
-            if city:
-                fallback = f"{street}, {city}, Poland"
-                location = geolocator.geocode(fallback, timeout=10)
-                if location:
-                    return float(location.latitude), float(location.longitude)
     except Exception:
         pass
         
@@ -176,14 +195,13 @@ with tab_scraped:
             st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True, key="field_title")
             st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True, key="field_price")
             
-            # --- CONVERT ADDRESS FIELD TO EDITABLE DROPDOWN INPUT ENGINE ---
             user_edited_address = st.text_input(
-                "Property Address (Editable - Clean up this string if map matching fails):", 
+                "Property Address (Editable):", 
                 value=cache["address"], 
                 key="field_address_editable"
             )
             
-            # Re-verify layout coordinates if the address text was manually changed
+            # Recalculate coordinates if user updates the address text box
             if user_edited_address != cache["address"]:
                 new_lat, new_lon = get_coordinates(user_edited_address)
                 cache["address"] = user_edited_address
@@ -194,7 +212,7 @@ with tab_scraped:
             if cache["latitude"] and cache["longitude"]:
                 st.success(f"✅ Map Match Found! Coordinates resolved to: {cache['latitude']}, {cache['longitude']}")
             else:
-                st.error("❌ Geocoding Failed! Try shortening the address format directly in the text box above to something simpler like: 'ul. Popowicka, Wrocław, Poland'")
+                st.error("❌ Geocoding Failed! The address could not be matched automatically. Try removing the district terms manually.")
             
             metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             with metric_col1:
@@ -254,29 +272,29 @@ with tab_scraped:
                 except Exception as database_error:
                     st.error(f"Failed to log entry into database table: {database_error}")
 
-    with col2:
-        st.subheader("Active Current Track Records Index")
-        try:
-            db_query = supabase.table("properties").select("*").execute()
-            properties_list = db_query.data
-        except Exception:
-            properties_list = []
+with col2:
+    st.subheader("Active Current Track Records Index")
+    try:
+        db_query = supabase.table("properties").select("*").execute()
+        properties_list = db_query.data
+    except Exception:
+        properties_list = []
 
-        if properties_list:
-            df_all = pd.DataFrame(properties_list)
-            df_current = df_all[df_all["is_current"] == True]
+    if properties_list:
+        df_all = pd.DataFrame(properties_list)
+        df_current = df_all[df_all["is_current"] == True]
+        
+        if not df_current.empty:
+            display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]
+            existing_cols = [c for c in display_columns if c in df_current.columns]
+            st.dataframe(df_current[existing_cols].sort_values(by="rating", ascending=False), use_container_width=True)
             
-            if not df_current.empty:
-                display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]
-                existing_cols = [c for c in display_columns if c in df_current.columns]
-                st.dataframe(df_current[existing_cols].sort_values(by="rating", ascending=False), use_container_width=True)
-                
-            st.markdown("---")
-            st.write("### Complete Audit Timeline (SCD Type 2 History)")
-            df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False])
-            st.dataframe(df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]], use_container_width=True)
-        else:
-            st.info("No records present in your tracking ledger index yet.")
+        st.markdown("---")
+        st.write("### Complete Audit Timeline (SCD Type 2 History)")
+        df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False])
+        st.dataframe(df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]], use_container_width=True)
+    else:
+        st.info("No records present in your tracking ledger index yet.")
 
 # =========================================================================
 # PAGE WORKSPACE 2: PORTFOLIO MAP EXPLORER
