@@ -4,19 +4,10 @@ from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
-from geopy.geocoders import Nominatim
 from supabase import create_client
 import pandas as pd
 import time
-import ssl
-import certifi
 from datetime import datetime
-
-# --- MAC GLOBAL SSL CERTIFICATE BYPASS ---
-try:
-    ssl._create_default_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
 
 # --- INITIALIZE DATABASE CONNECTION ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -75,7 +66,6 @@ def intelligent_scraper(url: str):
         {clean_text}
         """
         
-        # Locked to modern endpoints to prevent 404 routing mismatches
         models_to_try = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
         ai_response = None
         
@@ -107,22 +97,6 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. FIXED GEOCODING FUNCTION USING CERTIFI
-def get_coordinates(address_string: str):
-    try:
-        secure_ssl_context = ssl.create_default_context(cafile=certifi.where())
-        geolocator = Nominatim(
-            user_agent="property_tracker_hub_app",
-            ssl_context=secure_ssl_context
-        )
-        location = geolocator.geocode(address_string, timeout=10)
-        if location:
-            return location.latitude, location.longitude
-        return None, None
-    except Exception as e:
-        st.warning(f"Geocoding notice: Could not convert address automatically. ({e})")
-        return None, None
-
 # --- STREAMLIT USER INTERFACE CONFIGURATION ---
 st.set_page_config(layout="wide")
 st.title("🏡 Property Evaluation & History Tracker")
@@ -139,8 +113,6 @@ with col1:
             with st.spinner("Scanning webpage metadata elements..."):
                 extracted = intelligent_scraper(target_url)
                 if extracted:
-                    lat, lon = get_coordinates(extracted.address)
-                    
                     st.session_state["scraped_cache"] = {
                         "url": target_url,
                         "title": extracted.title,
@@ -150,9 +122,7 @@ with col1:
                         "rooms": extracted.rooms,
                         "floor": extracted.floor,
                         "year_built": extracted.year_built,
-                        "description": extracted.description,
-                        "latitude": lat,
-                        "longitude": lon
+                        "description": extracted.description
                     }
                     st.success("Web metadata extraction complete!")
         else:
@@ -163,14 +133,23 @@ with col1:
         st.markdown("---")
         st.subheader("Step 2: Self-Input & Data Enrichment")
         
-        title_val = st.text_input("Listing Title:", value=cache["title"])
-        price_val = st.text_input("Listing Price:", value=cache["price"])
-        address_val = st.text_input("Listing Address:", value=cache["address"])
-        area_val = st.text_input("Surface Size (m²):", value=cache["area"])
-        rooms_val = st.text_input("Rooms Amount:", value=cache["rooms"])
-        floor_val = st.text_input("Floor Level Location:", value=cache["floor"])
-        year_val = st.text_input("Construction Year:", value=cache["year_built"])
+        # --- LOCKED EXTRACTED PARAMETERS ---
+        # Displayed cleanly using read-only layout boxes so they cannot be edited
+        st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True)
+        st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True)
+        st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True)
         
+        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        with metric_col1:
+            st.text_input("Area (m²):", value=cache["area"], disabled=True)
+        with metric_col2:
+            st.text_input("Rooms:", value=cache["rooms"], disabled=True)
+        with metric_col3:
+            st.text_input("Floor:", value=cache["floor"], disabled=True)
+        with metric_col4:
+            st.text_input("Year Built:", value=cache["year_built"], disabled=True)
+        
+        # --- EDITABLE CUSTOM USER INPUT FIELDS ---
         st.markdown("### Your Custom Input Evaluation Metrics")
         user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.")
         user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5)
@@ -180,6 +159,7 @@ with col1:
             now_iso = datetime.utcnow().isoformat() + "Z"
             
             try:
+                # --- SCD TYPE 2 VERSION MANAGEMENT LOGIC ---
                 existing_check = supabase.table("properties")\
                     .select("id")\
                     .eq("url", cache["url"])\
@@ -195,18 +175,16 @@ with col1:
                 
                 property_payload = {
                     "url": cache["url"],
-                    "title": title_val,
-                    "address": address_val,
-                    "price": price_val,
-                    "area": area_val,
-                    "rooms": rooms_val,
-                    "floor": floor_val,
-                    "year_built": year_val,
+                    "title": cache["title"],
+                    "address": cache["address"],
+                    "price": cache["price"],
+                    "area": cache["area"],
+                    "rooms": cache["rooms"],
+                    "floor": cache["floor"],
+                    "year_built": cache["year_built"],
                     "my_notes": user_notes,
                     "rating": user_rating,
                     "status": current_status,
-                    "latitude": cache["latitude"],
-                    "longitude": cache["longitude"],
                     "valid_from": now_iso,
                     "is_current": True
                 }
@@ -220,7 +198,7 @@ with col1:
                 st.error(f"Failed to log entry into database table: {database_error}")
 
 with col2:
-    st.subheader("Tracking Ledger Grid & Interactive Mapping Map")
+    st.subheader("Tracking Ledger Grid & Records View")
     
     try:
         db_query = supabase.table("properties").select("*").execute()
@@ -233,20 +211,15 @@ with col2:
         df_all = pd.DataFrame(properties_list)
         df_current = df_all[df_all["is_current"] == True]
         
-        st.write("### Active Property Pins")
-        if not df_current.dropna(subset=['latitude', 'longitude']).empty:
-            st.map(df_current[['latitude', 'longitude']], zoom=12)
-            
-        st.markdown("---")
         st.write("### Active Current Track Records Index")
         if not df_current.empty:
             display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]
             existing_cols = [c for c in display_columns if c in df_current.columns]
-            st.dataframe(df_current[existing_cols].sort_values(by="rating", ascending=False))
+            st.dataframe(df_current[existing_cols].sort_values(by="rating", ascending=False), use_container_width=True)
             
         st.markdown("---")
         st.write("### Complete Audit Timeline (SCD Type 2 History)")
         df_sorted = df_all.sort_values(by=["url", "valid_from"], ascending=[True, False])
-        st.dataframe(df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]])
+        st.dataframe(df_sorted[["url", "price", "status", "rating", "my_notes", "is_current", "valid_from"]], use_container_width=True)
     else:
         st.info("No records present in your tracking ledger index yet.")
