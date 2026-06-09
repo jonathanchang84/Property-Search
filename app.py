@@ -137,7 +137,6 @@ def intelligent_scraper(url: str):
         soup = BeautifulSoup(response.text, "html.parser")
         discovered_address = extract_address_from_map_tag(soup)
         
-        # Look for the deactivation banner to pass this context to the AI or log it
         has_deactivation_banner = "To ogłoszenie jest już niedostępne" in response.text
         
         extracted_chunks = []
@@ -347,13 +346,11 @@ with tab_scraped:
                         lat, lon = get_coordinates(extracted.address)
                         numeric_price = clean_monetary_value(extracted.price)
                         
-                        # Fetch current database status to see if it was previously marked as unavailable
                         inferred_status = "Interested"
                         try:
                             existing_rec = supabase.table("properties").select("status").eq("url", target_url).eq("is_current", True).execute()
                             if existing_rec.data:
                                 current_db_status = existing_rec.data[0]["status"]
-                                # If it was unavailable, but banner is gone -> Revive it to Interested
                                 if current_db_status == "No Longer Available" and not is_banner_found:
                                     inferred_status = "Interested"
                                     st.info("🔄 This property was previously marked as 'No Longer Available', but it appears to be back on the market! Status reset to 'Interested'.")
@@ -410,7 +407,6 @@ with tab_scraped:
             user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.", key="field_notes")
             user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating")
             
-            # Dynamically default to the cached inferred status (handling auto-revival)
             status_index = STATUS_OPTIONS.index(cache["status"]) if cache["status"] in STATUS_OPTIONS else 0
             current_status = st.selectbox("Pipeline Track Status:", STATUS_OPTIONS, index=status_index, key="field_status")
             
@@ -456,7 +452,6 @@ with tab_map_view:
         if "is_current" in df_all.columns:
             df_current = df_all[df_all["is_current"] == True].copy()
 
-    # SYSTEM ADMINISTRATIVE HUB: AUTOMATED STATUS HEALTH & REVIVAL CHECKS
     with st.expander("🛠️ Workspace Pipeline Maintenance Tools", expanded=False):
         st.markdown("#### Automated Integrity & Revival Console")
         st.caption("Pings all database tracking records to update expired links or automatically resurrect properties that came back on the market.")
@@ -476,7 +471,6 @@ with tab_map_view:
                     
                     current_availability = check_property_availability(record["url"])
                     
-                    # Scenario 1: Property was active, but is now closed/expired
                     if current_availability == "No Longer Available" and record["status"] != "No Longer Available":
                         try:
                             supabase.table("properties").update({"status": "No Longer Available"}).eq("id", record["id"]).execute()
@@ -484,7 +478,6 @@ with tab_map_view:
                         except Exception as e:
                             st.error(f"Database write exception on record {record['id']}: {e}")
                             
-                    # Scenario 2: Property was dead, but has been re-listed / back on market
                     elif current_availability == "Active" and record["status"] == "No Longer Available":
                         try:
                             supabase.table("properties").update({"status": "Interested"}).eq("id", record["id"]).execute()
@@ -493,12 +486,11 @@ with tab_map_view:
                             st.error(f"Database revival exception on record {record['id']}: {e}")
                             
                     scan_progress_bar.progress((index + 1) / total_records_count)
-                    time.sleep(0.2)  # Defensive throttling
+                    time.sleep(0.2)
                     
                 scan_status_text.empty()
                 scan_progress_bar.empty()
                 
-                # Report summary findings back to the workflow context
                 if deactivated_counter > 0 or revived_counter > 0:
                     summary_msg = "Sync integration complete! "
                     if deactivated_counter > 0:
@@ -640,14 +632,21 @@ with tab_map_view:
             df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
             df_display = df_display_source[ordered_columns].copy().sort_values(by=["ranking", "rating"], ascending=[False, False])
 
+            # ENHANCED CONFIGURATION BLOCK FOR MAIN DATA GRID
             st.data_editor(
                 df_display,
                 column_config={
-                    "id": None, "ranking": st.column_config.NumberColumn("Ranking"),
-                    "rating": st.column_config.NumberColumn("Rating"), "title": st.column_config.TextColumn("Title", disabled=True),
-                    "address": st.column_config.TextColumn("Address", disabled=True), "area": st.column_config.TextColumn("Area", disabled=True),
+                    "id": None, 
+                    "ranking": st.column_config.NumberColumn("Ranking"),
+                    "rating": st.column_config.NumberColumn("Rating"), 
+                    "title": st.column_config.TextColumn("Title", disabled=True),
+                    "address": st.column_config.TextColumn("Address", disabled=True), 
+                    "area": st.column_config.TextColumn("Area", disabled=True),
                     "status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
                     "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
+                    "Cost per m²": st.column_config.NumberColumn("Cost per m²", format="%.2f zł", disabled=True),
+                    "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł"),
+                    "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł"),
                     "Total Cost": st.column_config.NumberColumn("Total Cost", format="%.2f zł", disabled=True),
                 },
                 use_container_width=True, hide_index=True, key="map_tab_aligned_data_grid"
@@ -725,6 +724,7 @@ with tab_bulk_parser:
         st.subheader("📋 Temporary Staging Inspection Deck")
         
         with st.form("staging_inspection_form_deck"):
+            # ENHANCED CONFIGURATION BLOCK FOR TEMPORARY STAGING GRID
             staged_df_editor = st.data_editor(
                 st.session_state["bulk_staging_dataframe"],
                 column_config={
@@ -740,8 +740,8 @@ with tab_bulk_parser:
                     "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1),
                     "rating": st.column_config.NumberColumn("Rating", min_value=1, max_value=10, step=1),
                     "status": st.column_config.SelectboxColumn("Pipeline Track Status", options=STATUS_OPTIONS),
-                    "garage_cost": st.column_config.NumberColumn("Garage Cost (zł)", format="%.2f"),
-                    "storage_cost": st.column_config.NumberColumn("Storage Cost (zł)", format="%.2f"),
+                    "garage_cost": st.column_config.NumberColumn("Garage Cost", format="%.2f zł"),
+                    "storage_cost": st.column_config.NumberColumn("Storage Cost", format="%.2f zł"),
                     "my_notes": st.column_config.TextColumn("My Notes"),
                     "description": None
                 },
