@@ -69,6 +69,17 @@ def clean_area_value(area_str: str) -> float:
     except ValueError:
         return 0.0
 
+# HELPER: Clean Numerical Floor Strings (Transforms 'floor_10' -> '10')
+def clean_floor_value(floor_str: str) -> str:
+    if not floor_str:
+        return "Unknown"
+    normalized = floor_str.strip().lower()
+    if normalized in ["ground", "parter", "0"]:
+        return "Ground"
+    # Extract only the numbers from string variations
+    numeric_match = re.sub(r'\D+', '', normalized)
+    return numeric_match if numeric_match else floor_str
+
 # 2. INTELLIGENT SCRAPER TARGETING METADATA ATTRIBUTES (TAB 1 USE CASE)
 def intelligent_scraper(url: str):
     try:
@@ -169,8 +180,6 @@ def deterministic_bulk_api_scraper(url: str):
             return None
             
         soup = BeautifulSoup(response.text, "html.parser")
-        
-        # Target the Next.js hydration script tag where Otodom dumps all data
         target_script = soup.find("script", id="__NEXT_DATA__")
         
         if target_script and target_script.string:
@@ -181,30 +190,34 @@ def deterministic_bulk_api_scraper(url: str):
                 title = ad_data.get("title", "Unknown Title")
                 description = ad_data.get("description", "")[:200]
                 
-                # Dynamic Extraction Strategy for Nested Values
                 target_map = ad_data.get("target", {})
                 price_val = str(target_map.get("Price", "0"))
                 area_val = str(target_map.get("Area", "0"))
                 
-                # --- FIXED ADDRESS PROCESSING ENGINE ---
+                # --- FIXED STRATEGIC NESTED LOCATION LOOKUP ---
                 labels = ad_data.get("location", {}).get("labels", [])
                 if labels:
-                    # Traverses through Otodom label dict targets: e.g. [{"label": "ul. Zaporoska"}, {"label": "Krzyki"}]
-                    address_parts = [item.get("label") for item in labels if item.get("label")]
+                    address_parts = []
+                    for item in labels:
+                        # Extract labels sequentially: e.g. "st. Zaporozhye", "Krzyki", "Wrocław"
+                        part_label = item.get("label")
+                        if part_label and part_label not in address_parts:
+                            address_parts.append(part_label)
                     address = ", ".join(address_parts)
                 else:
+                    # Fallback mapping context tracking variant if labels collection payload isn't populated
                     address = ad_data.get("location", {}).get("address", {}).get("value", "Wrocław, Poland")
                 
-                # Safely harvest properties that may be lists or raw strings
                 def extract_target_char(key_name, default="Unknown"):
                     val = target_map.get(key_name)
                     if isinstance(val, list) and len(val) > 0:
                         return str(val[0])
                     return str(val) if val else default
 
+                # Dynamic cleanup rules ensuring "floor_10" handles transform conversions cleanly
                 rooms = extract_target_char("Rooms_num", "1")
-                floor = extract_target_char("Floor_no", "Ground")
-                floors = extract_target_char("Building_floors_num", "Unknown")
+                floor = clean_floor_value(extract_target_char("Floor_no", "Ground"))
+                floors = clean_floor_value(extract_target_char("Building_floors_num", "Unknown"))
                 year_built = extract_target_char("Build_year", "Unknown")
                 
                 return {
@@ -213,7 +226,7 @@ def deterministic_bulk_api_scraper(url: str):
                     "description": description
                 }
 
-        # FALLBACK PATHWAY: Regex strategy if script tags mutate
+        # REGEX BACKUP PIPELINE
         page_html = response.text
         title_match = re.search(r'"title"\s*:\s*"([^"]+)"', page_html)
         price_match = re.search(r'"value"\s*:\s*([0-9\s]+),[^}]*"__typename"\s*:\s*"Price"', page_html) or re.search(r'"Price"\s*:\s*\[\s*"([0-9.]+)"', page_html)
@@ -332,8 +345,8 @@ with tab_scraped:
                             "price": numeric_price,
                             "area": extracted.area,
                             "rooms": extracted.rooms,
-                            "floor": extracted.floor,
-                            "floors": extracted.floors,
+                            "floor": clean_floor_value(extracted.floor),
+                            "floors": clean_floor_value(extracted.floors),
                             "year_built": extracted.year_built,
                             "description": extracted.description,
                             "latitude": lat,
@@ -635,13 +648,12 @@ with tab_map_view:
                 st.rerun()
 
 # =========================================================================
-# PAGE WORKSPACE 3: BULK PARSER (ENHANCED MULTI-INPUT VERSION)
+# PAGE WORKSPACE 3: BULK PARSER
 # =========================================================================
 with tab_bulk_parser:
     st.subheader("📥 Bulk Property Processing Center")
     st.markdown("Supply Otodom listing links via an explicit file upload or by pasting them directly below.")
     
-    # Dual-Input Layout Split Engine
     input_col1, input_col2 = st.columns(2)
     target_url_list = []
     
@@ -661,7 +673,6 @@ with tab_bulk_parser:
         text_area_input = st.text_area(
             "Option B: Paste Multiple URLs Directly", 
             placeholder="Paste raw links here.\nSeparate multiple items using commas or individual line breaks.",
-            help="Accepts links cleanly isolated via spaces, commas, or line breaks.",
             key="bulk_text_area_urls"
         )
         if text_area_input.strip():
@@ -669,7 +680,6 @@ with tab_bulk_parser:
             valid_links = [lnk.strip() for lnk in extracted_links if "otodom.pl" in lnk.lower() and lnk.strip()]
             target_url_list.extend(valid_links)
 
-    # Deduplicate cumulative entries dynamically
     target_url_list = list(dict.fromkeys(target_url_list))
 
     if target_url_list:
@@ -705,60 +715,71 @@ with tab_bulk_parser:
             else:
                 st.error("Extraction failed to resolve listing fields. Confirm that target addresses remain active.")
 
-    # Interactive Staging Deck Panel Section
+    # --- ENHANCED FORM DRIVEN INSPECTION DECK WORKFLOW ---
     if "bulk_staging_dataframe" in st.session_state and not st.session_state["bulk_staging_dataframe"].empty:
         st.markdown("---")
         st.subheader("📋 Temporary Staging Inspection Deck")
-        st.caption("💡 To drop a property completely before saving, select the row header checkbox and tap the **Trash Can** icon or hit backspace/delete.")
+        st.caption("Verify and edit fields directly in this grid before committing them permanently to Supabase.")
         
-        staged_df_editor = st.data_editor(
-            st.session_state["bulk_staging_dataframe"],
-            column_config={
-                "url": st.column_config.TextColumn("URL", disabled=True),
-                "title": st.column_config.TextColumn("Title", disabled=False),
-                "address": st.column_config.TextColumn("Address (Editable)", disabled=False),
-                "price": st.column_config.NumberColumn("Base Price (zł)", format="%.2f", disabled=False),
-                "area": st.column_config.TextColumn("Area (m²)", disabled=False),
-                "rooms": st.column_config.TextColumn("Rooms", disabled=False),
-                "floor": st.column_config.TextColumn("Floor", disabled=False),
-                "floors": st.column_config.TextColumn("Total Floors", disabled=False),
-                "year_built": st.column_config.TextColumn("Year Built", disabled=False),
-                "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1),
-                "rating": st.column_config.NumberColumn("Rating", min_value=1, max_value=10, step=1),
-                "status": st.column_config.SelectboxColumn("Pipeline Track Status", options=STATUS_OPTIONS),
-                "garage_cost": st.column_config.NumberColumn("Garage Cost (zł)", format="%.2f"),
-                "storage_cost": st.column_config.NumberColumn("Storage Cost (zł)", format="%.2f"),
-                "my_notes": st.column_config.TextColumn("My Notes"),
-                "description": None
-            },
-            use_container_width=True,
-            hide_index=False,
-            num_rows="dynamic",
-            key="bulk_staging_active_grid"
-        )
-        
-        grid_state = st.session_state.get("bulk_staging_active_grid")
-        if grid_state:
-            has_state_changed = False
-            current_tracked_df = st.session_state["bulk_staging_dataframe"].copy()
+        # Wrapped inside a clean form block context layout to avoid premature re-runs
+        with st.form("staging_inspection_form_deck"):
+            staged_df_editor = st.data_editor(
+                st.session_state["bulk_staging_dataframe"],
+                column_config={
+                    "url": st.column_config.TextColumn("URL", disabled=True),
+                    "title": st.column_config.TextColumn("Title", disabled=False),
+                    "address": st.column_config.TextColumn("Address (Editable)", disabled=False),
+                    "price": st.column_config.NumberColumn("Base Price (zł)", format="%.2f", disabled=False),
+                    "area": st.column_config.TextColumn("Area (m²)", disabled=False),
+                    "rooms": st.column_config.TextColumn("Rooms", disabled=False),
+                    "floor": st.column_config.TextColumn("Floor", disabled=False),
+                    "floors": st.column_config.TextColumn("Total Floors", disabled=False),
+                    "year_built": st.column_config.TextColumn("Year Built", disabled=False),
+                    "ranking": st.column_config.NumberColumn("Ranking", min_value=0, max_value=1000, step=1),
+                    "rating": st.column_config.NumberColumn("Rating", min_value=1, max_value=10, step=1),
+                    "status": st.column_config.SelectboxColumn("Pipeline Track Status", options=STATUS_OPTIONS),
+                    "garage_cost": st.column_config.NumberColumn("Garage Cost (zł)", format="%.2f"),
+                    "storage_cost": st.column_config.NumberColumn("Storage Cost (zł)", format="%.2f"),
+                    "my_notes": st.column_config.TextColumn("My Notes"),
+                    "description": None
+                },
+                use_container_width=True,
+                hide_index=False,
+                num_rows="dynamic",
+                key="bulk_staging_active_grid"
+            )
             
-            if grid_state["edited_rows"]:
-                for row_idx_str, fields_dict in grid_state["edited_rows"].items():
-                    row_idx = int(row_idx_str)
-                    for key, val in fields_dict.items():
-                        current_tracked_df.iat[row_idx, current_tracked_df.columns.get_loc(key)] = val
-                has_state_changed = True
-                
-            if grid_state["deleted_rows"]:
-                indices_to_drop = [int(idx) for idx in grid_state["deleted_rows"]]
-                current_tracked_df = current_tracked_df.drop(indices_to_drop).reset_index(drop=True)
-                has_state_changed = True
-                
-            if has_state_changed:
-                st.session_state["bulk_staging_dataframe"] = current_tracked_df
-                st.rerun()
+            form_col1, form_col2 = st.columns([1, 4])
+            with form_col1:
+                # Dedicated Form Action Trigger
+                apply_changes = st.form_submit_button("💾 Apply Grid Modifications")
 
-        # Database Commit & Control Buttons
+        # Process mutations only when button is explicitly clicked
+        if apply_changes:
+            grid_state = st.session_state.get("bulk_staging_active_grid")
+            if grid_state:
+                current_tracked_df = st.session_state["bulk_staging_dataframe"].copy()
+                has_changed = False
+                
+                if grid_state["edited_rows"]:
+                    for row_idx_str, fields_dict in grid_state["edited_rows"].items():
+                        row_idx = int(row_idx_str)
+                        for key, val in fields_dict.items():
+                            current_tracked_df.iat[row_idx, current_tracked_df.columns.get_loc(key)] = val
+                    has_changed = True
+                    
+                if grid_state["deleted_rows"]:
+                    indices_to_drop = [int(idx) for idx in grid_state["deleted_rows"]]
+                    current_tracked_df = current_tracked_df.drop(indices_to_drop).reset_index(drop=True)
+                    has_changed = True
+                    
+                if has_changed:
+                    st.session_state["bulk_staging_dataframe"] = current_tracked_df
+                    st.success("Grid alterations successfully applied!")
+                    time.sleep(0.5)
+                    st.rerun()
+
+        # Database Sync Fleet Action Buttons Panel
         commit_col1, commit_col2 = st.columns([1, 4])
         with commit_col1:
             if st.button("🚀 Commit All to Database", key="btn_commit_bulk_to_supabase_fleet"):
