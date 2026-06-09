@@ -115,8 +115,8 @@ def intelligent_scraper(url: str):
         {clean_text}
         """
         
-        # Swapped array priority order to pull standard high-limit production flashes first, mitigating 429 locks
-        models_to_try = ['gemini-1.5-flash', 'gemini-2.5-flash']
+        # Fixed model naming convention tailored strictly for the current GenAI client SDK layer
+        models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
         ai_response = None
         
         for model_name in models_to_try:
@@ -134,7 +134,7 @@ def intelligent_scraper(url: str):
             except Exception as model_error:
                 error_str = str(model_error)
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    if model_name == 'gemini-1.5-flash':
+                    if model_name == 'gemini-2.5-flash':
                         st.warning("Primary production tier baseline exhausted. Moving to secondary pipeline variant...")
                         time.sleep(1)
                         continue
@@ -462,7 +462,6 @@ with tab_map_view:
                 df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
 
         with filter_col5:
-            # --- INTERACTIVE RATING SLIDER ---
             rating_range = st.slider("Filter by Rating (1-10):", min_value=1, max_value=10, value=(1, 10), step=1)
             if not df_filtered.empty:
                 df_filtered = df_filtered[(df_filtered["rating"] >= rating_range[0]) & (df_filtered["rating"] <= rating_range[1])]
