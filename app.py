@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
+from geopy.geocoders import Nominatim
 from supabase import create_client
 import pandas as pd
 import time
@@ -83,7 +84,7 @@ def intelligent_scraper(url: str):
                 break
             except Exception as model_error:
                 if model_name == 'gemini-2.5-flash':
-                    st.warning("Gemini 2.5 Flash is busy. Rerouting to high-capacity Gemini 2.5 Flash-Lite backup...")
+                    st.warning("Gemini 2.5 Flash is busy. Rerouting to backup processing channels...")
                     time.sleep(1) 
                     continue
                 else:
@@ -96,6 +97,19 @@ def intelligent_scraper(url: str):
     except Exception as e:
         st.error(f"Gemini API Error: {e}")
         return None
+
+# 3. PRODUCTION CLOUD GEOCODING ENGINE
+def get_coordinates(address_string: str):
+    try:
+        # Running live on Linux cloud containers bypasses local operating system certificate issues natively
+        geolocator = Nominatim(user_agent="property_tracker_hub_live_production")
+        location = geolocator.geocode(address_string, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+        return None, None
+    except Exception as e:
+        st.warning(f"Geocoding note: Address coordinates could not be computed on this version. ({e})")
+        return None, None
 
 # --- STREAMLIT USER INTERFACE CONFIGURATION ---
 st.set_page_config(layout="wide")
@@ -110,9 +124,12 @@ with col1:
     
     if st.button("Analyze with Intelligent Parsing"):
         if target_url:
-            with st.spinner("Scanning webpage metadata elements..."):
+            with st.spinner("Scanning webpage metadata elements and calculating geographic point placement..."):
                 extracted = intelligent_scraper(target_url)
                 if extracted:
+                    # Capture exact latitude and longitude live
+                    lat, lon = get_coordinates(extracted.address)
+                    
                     st.session_state["scraped_cache"] = {
                         "url": target_url,
                         "title": extracted.title,
@@ -122,9 +139,11 @@ with col1:
                         "rooms": extracted.rooms,
                         "floor": extracted.floor,
                         "year_built": extracted.year_built,
-                        "description": extracted.description
+                        "description": extracted.description,
+                        "latitude": lat,
+                        "longitude": lon
                     }
-                    st.success("Web metadata extraction complete!")
+                    st.success("Web metadata extraction and geocoding complete!")
         else:
             st.warning("Please input a valid listing link.")
 
@@ -133,8 +152,7 @@ with col1:
         st.markdown("---")
         st.subheader("Step 2: Self-Input & Data Enrichment")
         
-        # --- LOCKED EXTRACTED PARAMETERS ---
-        # Displayed cleanly using read-only layout boxes so they cannot be edited
+        # --- LOCKED EXTRACTED PARAMETERS (READ-ONLY) ---
         st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True)
         st.text_input("Listing Price (Read-Only):", value=cache["price"], disabled=True)
         st.text_input("Listing Address (Read-Only):", value=cache["address"], disabled=True)
@@ -186,7 +204,9 @@ with col1:
                     "rating": user_rating,
                     "status": current_status,
                     "valid_from": now_iso,
-                    "is_current": True
+                    "is_current": True,
+                    "latitude": cache["latitude"],  # Commit coordinates to DB
+                    "longitude": cache["longitude"]
                 }
                 
                 supabase.table("properties").insert(property_payload).execute()
@@ -198,7 +218,7 @@ with col1:
                 st.error(f"Failed to log entry into database table: {database_error}")
 
 with col2:
-    st.subheader("Tracking Ledger Grid & Records View")
+    st.subheader("Tracking Ledger Grid & Interactive Location Map")
     
     try:
         db_query = supabase.table("properties").select("*").execute()
@@ -211,6 +231,18 @@ with col2:
         df_all = pd.DataFrame(properties_list)
         df_current = df_all[df_all["is_current"] == True]
         
+        # --- RE-INTEGRATED INTERACTIVE MAP VISUALIZATION ---
+        st.write("### Active Property Pins")
+        if "latitude" in df_current.columns and "longitude" in df_current.columns:
+            df_map_pins = df_current.dropna(subset=['latitude', 'longitude'])
+            if not df_map_pins.empty:
+                st.map(df_map_pins[['latitude', 'longitude']], zoom=12)
+            else:
+                st.info("No active properties contain valid positioning coordinates yet.")
+        else:
+            st.info("Map indexing columns are initializing across data fields.")
+            
+        st.markdown("---")
         st.write("### Active Current Track Records Index")
         if not df_current.empty:
             display_columns = ["rating", "title", "price", "status", "my_notes", "area", "rooms", "floor", "year_built", "address"]
