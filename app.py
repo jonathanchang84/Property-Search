@@ -9,6 +9,7 @@ from supabase import create_client
 import pandas as pd
 import time
 import folium
+import re
 from streamlit_folium import st_folium
 from datetime import datetime
 
@@ -20,7 +21,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # 1. SPECIFIC SPECIFICATION BLUEPRINT FOR GEMINI EXTRACTION
 class PropertyDetails(BaseModel):
     title: str = Field(description="The main headline or title of the property listing")
-    address: str = Field(description="A clean, map-friendly address format. Example: 'ul. Popowicka, Wrocław, Poland'. Strip away specific apartment or block numbers, keep only street, city, and country.")
+    address: str = Field(description="The raw address location hierarchy found on the listing webpage.")
     price: str = Field(description="The listed price, including the currency symbol")
     area: str = Field(description="The total area/surface size of the property in square meters (m²)")
     rooms: str = Field(description="The number of rooms in the property")
@@ -63,12 +64,6 @@ def intelligent_scraper(url: str):
         structured element tags extracted from a property listing. 
         Analyze the key parameters and fill out the required schema details flawlessly.
         
-        CRITICAL RULE FOR ADDRESS FORMATTING:
-        Look at the location elements. You must output the address string in a standard layout 
-        that a mapping geocoding service can locate immediately. 
-        Format it strictly as: [Street Name/Neighborhood], [City], Poland.
-        Do NOT include room numbers, apartment identifiers, or local descriptors.
-        
         Extracted Elements & Content:
         {clean_text}
         """
@@ -104,26 +99,52 @@ def intelligent_scraper(url: str):
         st.error(f"Gemini API Error: {e}")
         return None
 
-# 3. ADVANCED CLOUD GEOCODING ENGINE
+# 3. ROBUST GEOCODING LOOKUP FEATURING ADDRESS SANITIZATION FILTER
 def get_coordinates(address_string: str):
-    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v5")
+    geolocator = Nominatim(user_agent="property_tracker_hub_live_production_v7")
     
-    # Try the raw extracted layout first
+    # Clean step: If address looks like 'ul. X, District, District, City, Voivodeship', extract Street + City
+    cleaned_address = address_string
     try:
-        location = geolocator.geocode(address_string, timeout=10)
+        if "," in address_string:
+            parts = [p.strip() for p in address_string.split(",")]
+            
+            street = ""
+            city = ""
+            
+            # Identify components by parsing structural markers
+            for part in parts:
+                if part.lower().startswith("ul.") or "osiedle" in part.lower() or "os." in part.lower():
+                    street = part
+                if "wrocław" in part.lower():
+                    city = "Wrocław"
+                elif "kraków" in part.lower():
+                    city = "Kraków"
+                elif "warszawa" in part.lower():
+                    city = "Warszawa"
+            
+            # If street and city components are isolated, reassemble them perfectly
+            if street and city:
+                cleaned_address = f"{street}, {city}, Poland"
+            elif city and len(parts) >= 2:
+                # Fallback layout: Grab first part + city
+                cleaned_address = f"{parts[0]}, {city}, Poland"
+    except Exception:
+        pass
+
+    # Execution Option A: Try clean resolved address layout
+    try:
+        location = geolocator.geocode(cleaned_address, timeout=10)
         if location:
             return float(location.latitude), float(location.longitude)
     except Exception:
         pass
         
-    # Fallback layout: clear everything except final components if too complex
+    # Execution Option B: Try raw unchanged layout fallback
     try:
-        if "," in address_string:
-            parts = address_string.split(",")
-            fallback_address = ", ".join([p.strip() for p in parts[-2:]])
-            location = geolocator.geocode(fallback_address, timeout=10)
-            if location:
-                return float(location.latitude), float(location.longitude)
+        location = geolocator.geocode(address_string, timeout=10)
+        if location:
+            return float(location.latitude), float(location.longitude)
     except Exception:
         pass
         
@@ -183,7 +204,7 @@ with tab_scraped:
             if cache["latitude"] and cache["longitude"]:
                 st.success(f"✅ Map Match Found! Coordinates resolved to: {cache['latitude']}, {cache['longitude']}")
             else:
-                st.error(f"❌ Geocoding Failed! The address string '{cache['address']}' could not be matched on the global index map.")
+                st.error(f"❌ Geocoding Failed! The address layout could not be matched on the map index. Try modifying the field above.")
             
             metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             with metric_col1:
@@ -282,6 +303,7 @@ with tab_map_view:
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
     
+    marker_group = folium.FeatureGroup(name="Properties")
     saved_pins_count = 0
     
     if map_properties:
@@ -289,13 +311,12 @@ with tab_map_view:
         df_map_current = df_map_all[df_map_all["is_current"] == True]
         
         if "latitude" in df_map_current.columns and "longitude" in df_map_current.columns:
+            df_map_current["latitude"] = pd.to_numeric(df_map_current["latitude"], errors='coerce')
+            df_map_current["longitude"] = pd.to_numeric(df_map_current["longitude"], errors='coerce')
             df_pins_to_render = df_map_current.dropna(subset=['latitude', 'longitude'])
             
             for _, row in df_pins_to_render.iterrows():
                 try:
-                    if row['latitude'] is None or row['longitude'] is None:
-                        continue
-                        
                     lat_coord = float(row['latitude'])
                     lon_coord = float(row['longitude'])
                     
@@ -313,13 +334,15 @@ with tab_map_view:
                         location=[lat_coord, lon_coord],
                         popup=folium.Popup(html_popup_markup, max_width=350),
                         icon=folium.Icon(color="red" if row['rating'] >= 8 else "blue", icon="home")
-                    ).add_to(folium_explorer_map)
+                    ).add_to(marker_group)
                     
                     saved_pins_count += 1
                 except Exception:
                     continue
 
-    st_folium(folium_explorer_map, use_container_width=True, height=550, key="fullscreen_portfolio_map")
+    marker_group.add_to(folium_explorer_map)
+
+    st_folium(folium_explorer_map, use_container_width=True, height=550, key=f"fullscreen_map_pins_{saved_pins_count}")
     st.caption(f"Showing **{saved_pins_count}** active property pin points dropping into database coordinates tracking indexes.")
 
     if map_properties:
