@@ -84,12 +84,10 @@ def extract_address_from_map_tag(soup: BeautifulSoup) -> str:
     """
     Targets the unique map anchor tag to reliably extract the address string.
     """
-    # Strategy A: Target by href targeting the map anchor
     map_anchor = soup.find("a", href=lambda href: href and "#map" in href)
     if map_anchor and map_anchor.get_text(strip=True):
         return map_anchor.get_text(strip=True)
         
-    # Strategy B: Hard fallback via regular expression on the raw HTML for the specified class signature
     match = re.search(r'class="css-132xyjm\s+ecsiqhb3"[^>]*>(.*?)</a>', str(soup))
     if match:
         clean_match = re.sub('<[^<]+?>', '', match.group(1)).strip()
@@ -98,6 +96,39 @@ def extract_address_from_map_tag(soup: BeautifulSoup) -> str:
             
     return None
 
+# HELPER: Integrity and Availability Scanner Engine
+def check_property_availability(url: str) -> str:
+    """
+    Scans a property page for explicit signs of listing expiration.
+    Returns "No Longer Available" if the deactivation banner is found, otherwise "Active".
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url.strip(), headers=headers, timeout=10)
+        
+        # Safe catch if listing is completely deleted or throwing errors
+        if response.status_code == 404:
+            return "No Longer Available"
+        if response.status_code != 200:
+            return "Unknown"
+            
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Strategy A: Target specific target signature tag
+        target_span = soup.find("span", class_=lambda c: c and "css-5ujp2z" in c and "etuedte2" in c)
+        if target_span and "To ogłoszenie jest już niedostępne" in target_span.get_text():
+            return "No Longer Available"
+            
+        # Strategy B: String literal presence backup check
+        if "To ogłoszenie jest już niedostępne" in response.text:
+            return "No Longer Available"
+            
+        return "Active"
+    except Exception:
+        return "Unknown"
+
 # 2. INTELLIGENT SCRAPER TARGETING METADATA ATTRIBUTES (TAB 1 USE CASE)
 def intelligent_scraper(url: str):
     try:
@@ -105,8 +136,6 @@ def intelligent_scraper(url: str):
         response = requests.get(url, headers=headers, timeout=10)
         
         soup = BeautifulSoup(response.text, "html.parser")
-        
-        # Pull the specific address using the new anchor tag strategy
         discovered_address = extract_address_from_map_tag(soup)
         
         extracted_chunks = []
@@ -191,10 +220,6 @@ def intelligent_scraper(url: str):
 
 # --- BULK PROCESSING NON-AI API SCRAPER ENGINE ---
 def deterministic_bulk_api_scraper(url: str):
-    """
-    Scrapes listing properties without an AI layer by utilizing direct 
-    address tag tracking alongside frontend hydration elements.
-    """
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -206,8 +231,6 @@ def deterministic_bulk_api_scraper(url: str):
             return None
             
         soup = BeautifulSoup(response.text, "html.parser")
-        
-        # Resolve address immediately using the direct HTML signature discovered
         address = extract_address_from_map_tag(soup)
         
         target_script = soup.find("script", id="__NEXT_DATA__")
@@ -223,7 +246,6 @@ def deterministic_bulk_api_scraper(url: str):
                 price_val = str(target_map.get("Price", "0"))
                 area_val = str(target_map.get("Area", "0"))
                 
-                # If the map element parsing did not extract an address text, fall back to historical scripts
                 if not address:
                     labels = ad_data.get("location", {}).get("labels", [])
                     if labels:
@@ -253,22 +275,6 @@ def deterministic_bulk_api_scraper(url: str):
                     "description": description
                 }
 
-        # Flat markup parsing script fallback fallback 
-        page_html = response.text
-        title_match = re.search(r'"title"\s*:\s*"([^"]+)"', page_html)
-        price_match = re.search(r'"value"\s*:\s*([0-9\s]+),[^}]*"__typename"\s*:\s*"Price"', page_html) or re.search(r'"Price"\s*:\s*\[\s*"([0-9.]+)"', page_html)
-        area_match = re.search(r'"Area"\s*:\s*\[\s*"([0-9.]+)"', page_html)
-        
-        title = title_match.group(1) if title_match else "Otodom Property Listing"
-        price = clean_monetary_value(price_match.group(1)) if price_match else 0.0
-        area = area_match.group(1) if area_match else "0"
-        
-        return {
-            "url": url, "title": title, "address": address if address else "Wrocław, Poland", "price": price,
-            "area": area, "rooms": "3", "floor": "2", "floors": "3", "year_built": "Unknown",
-            "description": ""
-        }
-        
     except Exception:
         return None
 
@@ -296,44 +302,16 @@ def get_coordinates(address_string: str):
     clean_street = re.sub(r'^(ul\.|ulica|os\.|osiedle)\s+', '', street_candidate, flags=re.IGNORECASE)
 
     try:
-        structured_query_1 = {
-            "street": f"ul. {clean_street}",
-            "city": city_candidate,
-            "country": "Poland"
-        }
+        structured_query_1 = {"street": f"ul. {clean_street}", "city": city_candidate, "country": "Poland"}
         location = geolocator.geocode(structured_query_1, timeout=10)
-        if location:
-            return float(location.latitude), float(location.longitude)
-    except Exception:
-        pass
+        if location: return float(location.latitude), float(location.longitude)
+    except Exception: pass
 
     try:
-        structured_query_2 = {
-            "street": clean_street,
-            "city": city_candidate,
-            "country": "Poland"
-        }
+        structured_query_2 = {"street": clean_street, "city": city_candidate, "country": "Poland"}
         location = geolocator.geocode(structured_query_2, timeout=10)
-        if location:
-            return float(location.latitude), float(location.longitude)
-    except Exception:
-        pass
-
-    try:
-        flat_string_fallback = f"ul. {clean_street}, {city_candidate}, Poland"
-        location = geolocator.geocode(flat_string_fallback, timeout=10)
-        if location:
-            return float(location.latitude), float(location.longitude)
-    except Exception:
-        pass
-
-    try:
-        district_query = f"{clean_street}, {city_candidate}, Poland"
-        location = geolocator.geocode(district_query, timeout=10)
-        if location:
-            return float(location.latitude), float(location.longitude)
-    except Exception:
-        pass
+        if location: return float(location.latitude), float(location.longitude)
+    except Exception: pass
         
     return None, None
 
@@ -366,18 +344,11 @@ with tab_scraped:
                         numeric_price = clean_monetary_value(extracted.price)
                         
                         st.session_state["scraped_cache"] = {
-                            "url": target_url,
-                            "title": extracted.title,
-                            "address": extracted.address,
-                            "price": numeric_price,
-                            "area": extracted.area,
-                            "rooms": extracted.rooms,
-                            "floor": clean_floor_value(extracted.floor),
-                            "floors": clean_floor_value(extracted.floors),
-                            "year_built": extracted.year_built,
-                            "description": extracted.description,
-                            "latitude": lat,
-                            "longitude": lon
+                            "url": target_url, "title": extracted.title, "address": extracted.address,
+                            "price": numeric_price, "area": extracted.area, "rooms": extracted.rooms,
+                            "floor": clean_floor_value(extracted.floor), "floors": clean_floor_value(extracted.floors),
+                            "year_built": extracted.year_built, "description": extracted.description,
+                            "latitude": lat, "longitude": lon
                         }
                         st.success("Web metadata extraction complete!")
             else:
@@ -389,21 +360,8 @@ with tab_scraped:
             st.subheader("Step 2: Self-Input & Data Enrichment")
             
             st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True, key="field_title")
-            
-            price_input = st.number_input(
-                "Base Property Price (zł):", 
-                min_value=0.0, 
-                value=float(cache["price"]), 
-                step=5000.0, 
-                format="%.2f", 
-                key="field_price_numeric"
-            )
-            
-            user_edited_address = st.text_input(
-                "Property Address (Editable):", 
-                value=cache["address"], 
-                key="field_address_editable"
-            )
+            price_input = st.number_input("Base Property Price (zł):", min_value=0.0, value=float(cache["price"]), step=5000.0, format="%.2f", key="field_price_numeric")
+            user_edited_address = st.text_input("Property Address (Editable):", value=cache["address"], key="field_address_editable")
             
             if user_edited_address != cache["address"]:
                 new_lat, new_lon = get_coordinates(user_edited_address)
@@ -417,75 +375,42 @@ with tab_scraped:
                 st.error("❌ Geocoding Failed! Try cleaning up the text block to just: 'ul. Popowicka, Wrocław'")
             
             metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
-            with metric_col1:
-                st.text_input("Area (m²):", value=cache["area"], disabled=True, key="field_area")
-            with metric_col2:
-                st.text_input("Rooms:", value=cache["rooms"], disabled=True, key="field_rooms")
-            with metric_col3:
-                st.text_input("Floor:", value=cache["floor"], disabled=True, key="field_floor")
-            with metric_col4:
-                st.text_input("Total Floors:", value=cache.get("floors", "Unknown"), disabled=True, key="field_floors")
-            with metric_col5:
-                st.text_input("Year Built:", value=cache["year_built"], disabled=True, key="field_year")
+            with metric_col1: st.text_input("Area (m²):", value=cache["area"], disabled=True, key="field_area")
+            with metric_col2: st.text_input("Rooms:", value=cache["rooms"], disabled=True, key="field_rooms")
+            with metric_col3: st.text_input("Floor:", value=cache["floor"], disabled=True, key="field_floor")
+            with metric_col4: st.text_input("Total Floors:", value=cache.get("floors", "Unknown"), disabled=True, key="field_floors")
+            with metric_col5: st.text_input("Year Built:", value=cache["year_built"], disabled=True, key="field_year")
             
             st.markdown("### 💰 Additional Transaction Outlays (Numeric Polish Złoty)")
             cost_col1, cost_col2 = st.columns(2)
-            with cost_col1:
-                garage_input = st.number_input("Additional Cost - Garage (zł):", min_value=0.0, value=0.0, step=1000.0, format="%.2f", key="field_garage_numeric")
-            with cost_col2:
-                storage_input = st.number_input("Additional Cost - Storage (zł):", min_value=0.0, value=0.0, step=500.0, format="%.2f", key="field_storage_numeric")
+            with cost_col1: garage_input = st.number_input("Additional Cost - Garage (zł):", min_value=0.0, value=0.0, step=1000.0, format="%.2f", key="field_garage_numeric")
+            with cost_col2: storage_input = st.number_input("Additional Cost - Storage (zł):", min_value=0.0, value=0.0, step=500.0, format="%.2f", key="field_storage_numeric")
 
             st.markdown("### Your Custom Input Evaluation Metrics")
             user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.", key="field_notes")
             user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating")
-            
             current_status = st.selectbox("Pipeline Track Status:", STATUS_OPTIONS, key="field_status")
             
             if st.button("Commit This Record Version to Database", key="btn_commit_db"):
                 now_iso = datetime.utcnow().isoformat() + "Z"
-                
                 try:
-                    existing_check = supabase.table("properties")\
-                        .select("id")\
-                        .eq("url", cache["url"])\
-                        .eq("is_current", True)\
-                        .execute()
-                    
+                    existing_check = supabase.table("properties").select("id").eq("url", cache["url"]).eq("is_current", True).execute()
                     if existing_check.data:
-                        old_record_id = existing_check.data[0]["id"]
-                        supabase.table("properties")\
-                            .update({"is_current": False, "valid_to": now_iso})\
-                            .eq("id", old_record_id)\
-                            .execute()
+                        supabase.table("properties").update({"is_current": False, "valid_to": now_iso}).eq("id", existing_check.data[0]["id"]).execute()
                     
                     property_payload = {
-                        "url": cache["url"],
-                        "title": cache["title"],
-                        "address": cache["address"],
-                        "price": price_input,           
-                        "area": cache["area"],
-                        "rooms": cache["rooms"],
-                        "floor": cache["floor"],
-                        "floors": cache.get("floors", "Unknown"),
-                        "year_built": cache["year_built"],
-                        "garage_cost": garage_input,
-                        "storage_cost": storage_input,
-                        "my_notes": user_notes,
-                        "rating": user_rating,
-                        "status": current_status,
-                        "valid_from": now_iso,
-                        "is_current": True,
-                        "latitude": cache["latitude"],  
-                        "longitude": cache["longitude"]
+                        "url": cache["url"], "title": cache["title"], "address": cache["address"], "price": price_input,           
+                        "area": cache["area"], "rooms": cache["rooms"], "floor": cache["floor"], "floors": cache.get("floors", "Unknown"),
+                        "year_built": cache["year_built"], "garage_cost": garage_input, "storage_cost": storage_input,
+                        "my_notes": user_notes, "rating": user_rating, "status": current_status, "valid_from": now_iso,
+                        "is_current": True, "latitude": cache["latitude"], "longitude": cache["longitude"]
                     }
-                    
                     supabase.table("properties").insert(property_payload).execute()
                     st.success("Successfully logged property entry version parameters!")
                     del st.session_state["scraped_cache"]
                     st.rerun()
-                    
-                except Exception as database_error:
-                    st.error(f"Failed to log entry into database table: {database_error}")
+                except Exception as e:
+                    st.error(f"Failed to log entry into database table: {e}")
 
     with col2:
         st.subheader("Saved Property Records Overview")
@@ -508,6 +433,54 @@ with tab_map_view:
         if "is_current" in df_all.columns:
             df_current = df_all[df_all["is_current"] == True].copy()
 
+    # SYSTEM ADMINISTRATIVE HUB: AUTOMATED STATUS HEALTH CHECKS
+    with st.expander("🛠️ Workspace Pipeline Maintenance Tools", expanded=False):
+        st.markdown("#### Automated Integrity Check Console")
+        st.caption("Pings all active database tracking records to identify listings that have been deactivated or unlisted.")
+        
+        if st.button("🚀 Scan Portfolio Tracking for Expired Listings", key="btn_run_integrity_check"):
+            if not df_current.empty:
+                scan_progress_bar = st.progress(0)
+                scan_status_text = st.empty()
+                deactivated_counter = 0
+                
+                active_records_list = df_current.to_dict(orient="records")
+                total_records_count = len(active_records_list)
+                
+                for index, record in enumerate(active_records_list):
+                    scan_status_text.text(f"Scanning target entity {index+1}/{total_records_count}: {record['title'][:40]}...")
+                    
+                    # Ignore checking properties already flagged as unavailable to optimize requests
+                    if record["status"] == "No Longer Available":
+                        scan_progress_bar.progress((index + 1) / total_records_count)
+                        continue
+                        
+                    current_availability = check_property_availability(record["url"])
+                    
+                    if current_availability == "No Longer Available":
+                        try:
+                            supabase.table("properties").update({
+                                "status": "No Longer Available"
+                            }).eq("id", record["id"]).execute()
+                            deactivated_counter += 1
+                        except Exception as e:
+                            st.error(f"Database write exception on record {record['id']}: {e}")
+                            
+                    scan_progress_bar.progress((index + 1) / total_records_count)
+                    time.sleep(0.2)  # Defensive throttling
+                    
+                scan_status_text.empty()
+                scan_progress_bar.empty()
+                
+                if deactivated_counter > 0:
+                    st.success(f"Sync integration complete! Flagged **{deactivated_counter}** dead references to 'No Longer Available'.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.info("All scanned portfolio URL indexes currently remain open and operational.")
+            else:
+                st.warning("No tracking contexts present inside the data array to check.")
+
     st.markdown("### 🔍 Live Portfolio Filter Console")
     filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns([1.0, 1.0, 1.2, 1.1, 1.1])
     df_filtered = pd.DataFrame()
@@ -517,14 +490,10 @@ with tab_map_view:
         df_current["garage_cost"] = pd.to_numeric(df_current["garage_cost"], errors='coerce').fillna(0.0)
         df_current["storage_cost"] = pd.to_numeric(df_current["storage_cost"], errors='coerce').fillna(0.0)
         df_current["numeric_area"] = df_current["area"].apply(clean_area_value)
-        df_current["Cost per m²"] = df_current.apply(
-            lambda r: r["price"] / r["numeric_area"] if r["numeric_area"] > 0 else 0.0, axis=1
-        )
+        df_current["Cost per m²"] = df_current.apply(lambda r: r["price"] / r["numeric_area"] if r["numeric_area"] > 0 else 0.0, axis=1)
         df_current["Total Cost"] = df_current["price"] + df_current["garage_cost"] + df_current["storage_cost"]
-        
         df_current["rating"] = pd.to_numeric(df_current.get("rating", 5), errors='coerce').fillna(5).astype(int)
         df_current["ranking"] = pd.to_numeric(df_current.get("ranking", 0), errors='coerce').fillna(0).astype(int)
-
         df_current["title"] = df_current["title"].astype(str).fillna("")
         df_current["address"] = df_current["address"].astype(str).fillna("")
         df_current["my_notes"] = df_current["my_notes"].astype(str).fillna("")
@@ -533,47 +502,32 @@ with tab_map_view:
 
         with filter_col1:
             status_filter = st.multiselect("Filter by Status:", options=STATUS_OPTIONS, default=STATUS_OPTIONS)
-            if status_filter:
-                df_filtered = df_filtered[df_filtered["status"].isin(status_filter)]
-            else:
-                df_filtered = pd.DataFrame(columns=df_current.columns)
+            if status_filter: df_filtered = df_filtered[df_filtered["status"].isin(status_filter)]
+            else: df_filtered = pd.DataFrame(columns=df_current.columns)
                 
         with filter_col2:
             text_search = st.text_input("Filter by Text Match:", placeholder="e.g. Krzyki or Popowicka")
             if text_search and not df_filtered.empty:
                 search_lower = text_search.lower()
-                df_filtered = df_filtered[
-                    df_filtered["title"].str.lower().str.contains(search_lower) | 
-                    df_filtered["address"].str.lower().str.contains(search_lower) |
-                    df_filtered["my_notes"].str.lower().str.contains(search_lower)
-                ]
+                df_filtered = df_filtered[df_filtered["title"].str.lower().str.contains(search_lower) | df_filtered["address"].str.lower().str.contains(search_lower) | df_filtered["my_notes"].str.lower().str.contains(search_lower)]
 
         with filter_col3:
             min_p = float(df_current["Total Cost"].min()) if not df_current.empty else 0.0
             max_p = float(df_current["Total Cost"].max()) if not df_current.empty else 1500000.0
-            
-            if max_p <= min_p:
-                max_p = min_p + 1000.0
-                
+            if max_p <= min_p: max_p = min_p + 1000.0
             budget_range = st.slider("Filter by Budget (zł):", min_value=min_p, max_value=max_p, value=(min_p, max_p), step=10000.0, format="%d zł")
-            if not df_filtered.empty:
-                df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
+            if not df_filtered.empty: df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
 
         with filter_col4:
             min_r = int(df_current["ranking"].min()) if not df_current.empty else 0
             max_r = int(df_current["ranking"].max()) if not df_current.empty else 100
-            
-            if max_r <= min_r:
-                max_r = min_r + 1
-                
+            if max_r <= min_r: max_r = min_r + 1
             ranking_range = st.slider("Filter by Ranking:", min_value=min_r, max_value=max_r, value=(min_r, max_r), step=1)
-            if not df_filtered.empty:
-                df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
+            if not df_filtered.empty: df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
 
         with filter_col5:
             rating_range = st.slider("Filter by Rating (1-10):", min_value=1, max_value=10, value=(1, 10), step=1)
-            if not df_filtered.empty:
-                df_filtered = df_filtered[(df_filtered["rating"] >= rating_range[0]) & (df_filtered["rating"] <= rating_range[1])]
+            if not df_filtered.empty: df_filtered = df_filtered[(df_filtered["rating"] >= rating_range[0]) & (df_filtered["rating"] <= rating_range[1])]
 
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
@@ -590,7 +544,7 @@ with tab_map_view:
                 html_popup_markup = f"""
                 <div style='font-family: Arial, sans-serif; min-width: 250px;'>
                     <h4 style='margin:0 0 5px 0; color:#1f77b4;'>{row['title']}</h4>
-                    <b>⭐ Ranking:</b> {int(row.get('ranking', 0))}<br>
+                    <b><b>⭐ Ranking:</b> {int(row.get('ranking', 0))}<br>
                     <b>📊 Rating:</b> {int(row.get('rating', 5))}/10<br>
                     <b>📍 Address:</b> {row['address']}<br>
                     <b>📐 Area Size:</b> {row['area']}<br>
@@ -601,19 +555,12 @@ with tab_map_view:
                 </div>
                 """
                 marker_color = "blue"
-                if row['status'] in ["No Longer Available", "No Longer Interested"]:
-                    marker_color = "gray"
-                elif row.get('rating', 5) >= 8:
-                    marker_color = "red"
+                if row['status'] in ["No Longer Available", "No Longer Interested"]: marker_color = "gray"
+                elif row.get('rating', 5) >= 8: marker_color = "red"
 
-                folium.Marker(
-                    location=[lat_coord, lon_coord],
-                    popup=folium.Popup(html_popup_markup, max_width=350),
-                    icon=folium.Icon(color=marker_color, icon="home")
-                ).add_to(marker_group)
+                folium.Marker(location=[lat_coord, lon_coord], popup=folium.Popup(html_popup_markup, max_width=350), icon=folium.Icon(color=marker_color, icon="home")).add_to(marker_group)
                 saved_pins_count += 1
-            except Exception:
-                continue
+            except Exception: continue
 
     marker_group.add_to(folium_explorer_map)
     st_folium(folium_explorer_map, use_container_width=True, height=450, key=f"map_workbench_pins_{saved_pins_count}")
@@ -640,28 +587,20 @@ with tab_map_view:
                     if st.button("Save Changes Directly to Record", key="btn_save_inline_map"):
                         try:
                             if edit_address != selected_row["address"]:
-                                with st.spinner("Resolving coordinates for new address input..."):
-                                    new_lat, new_lon = get_coordinates(edit_address)
+                                with st.spinner("Resolving coordinates for new address input..."): new_lat, new_lon = get_coordinates(edit_address)
                             else:
                                 new_lat = selected_row.get("latitude")
                                 new_lon = selected_row.get("longitude")
                                 
                             supabase.table("properties").update({
-                                "address": edit_address,
-                                "latitude": new_lat,
-                                "longitude": new_lon,
-                                "ranking": edit_ranking, 
-                                "rating": edit_rating, 
-                                "status": edit_status,
-                                "price": edit_price, 
-                                "my_notes": edit_notes
+                                "address": edit_address, "latitude": new_lat, "longitude": new_lon,
+                                "ranking": edit_ranking, "rating": edit_rating, "status": edit_status,
+                                "price": edit_price, "my_notes": edit_notes
                             }).eq("id", selected_row["id"]).execute()
-                            
                             st.success("Record parameters updated and re-mapped successfully!")
                             time.sleep(0.5)
                             st.rerun()
-                        except Exception as update_err:
-                            st.error(f"Failed to push updates: {update_err}")
+                        except Exception as e: st.error(f"Failed to push updates: {e}")
 
         with grid_layout:
             st.markdown("### 📊 Active Filtered Records Index")
@@ -685,8 +624,7 @@ with tab_map_view:
             if st.session_state.get("map_tab_aligned_data_grid") and st.session_state["map_tab_aligned_data_grid"]["edited_rows"]:
                 for row_idx_str, updated_fields in st.session_state["map_tab_aligned_data_grid"]["edited_rows"].items():
                     record_id = df_display.iloc[int(row_idx_str)]["id"]
-                    if record_id:
-                        supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
+                    if record_id: supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
                 st.rerun()
 
 # =========================================================================
@@ -704,19 +642,12 @@ with tab_bulk_parser:
         if csv_file_handler:
             try:
                 input_dataframe = pd.read_csv(csv_file_handler)
-                if "url" in input_dataframe.columns:
-                    target_url_list.extend(input_dataframe["url"].dropna().unique().tolist())
-                else:
-                    st.error("❌ CSV file layout missing expected explicit structural header named 'url'.")
-            except Exception as e:
-                st.error(f"Error reading CSV: {e}")
+                if "url" in input_dataframe.columns: target_url_list.extend(input_dataframe["url"].dropna().unique().tolist())
+                else: st.error("❌ CSV file layout missing expected explicit structural header named 'url'.")
+            except Exception as e: st.error(f"Error reading CSV: {e}")
                 
     with input_col2:
-        text_area_input = st.text_area(
-            "Option B: Paste Multiple URLs Directly", 
-            placeholder="Paste raw links here.\nSeparate multiple items using commas or individual line breaks.",
-            key="bulk_text_area_urls"
-        )
+        text_area_input = st.text_area("Option B: Paste Multiple URLs Directly", placeholder="Paste raw links here.\nSeparate multiple items using commas or individual line breaks.", key="bulk_text_area_urls")
         if text_area_input.strip():
             extracted_links = re.split(r'[\s,]+', text_area_input)
             valid_links = [lnk.strip() for lnk in extracted_links if "otodom.pl" in lnk.lower() and lnk.strip()]
@@ -760,7 +691,6 @@ with tab_bulk_parser:
     if "bulk_staging_dataframe" in st.session_state and not st.session_state["bulk_staging_dataframe"].empty:
         st.markdown("---")
         st.subheader("📋 Temporary Staging Inspection Deck")
-        st.caption("Verify and edit fields directly in this grid before committing them permanently to Supabase.")
         
         with st.form("staging_inspection_form_deck"):
             staged_df_editor = st.data_editor(
@@ -783,15 +713,10 @@ with tab_bulk_parser:
                     "my_notes": st.column_config.TextColumn("My Notes"),
                     "description": None
                 },
-                use_container_width=True,
-                hide_index=False,
-                num_rows="dynamic",
-                key="bulk_staging_active_grid"
+                use_container_width=True, hide_index=False, num_rows="dynamic", key="bulk_staging_active_grid"
             )
-            
             form_col1, form_col2 = st.columns([1, 4])
-            with form_col1:
-                apply_changes = st.form_submit_button("💾 Apply Grid Modifications")
+            with form_col1: apply_changes = st.form_submit_button("💾 Apply Grid Modifications")
 
         if apply_changes:
             grid_state = st.session_state.get("bulk_staging_active_grid")
@@ -802,8 +727,7 @@ with tab_bulk_parser:
                 if grid_state["edited_rows"]:
                     for row_idx_str, fields_dict in grid_state["edited_rows"].items():
                         row_idx = int(row_idx_str)
-                        for key, val in fields_dict.items():
-                            current_tracked_df.iat[row_idx, current_tracked_df.columns.get_loc(key)] = val
+                        for key, val in fields_dict.items(): current_tracked_df.iat[row_idx, current_tracked_df.columns.get_loc(key)] = val
                     has_changed = True
                     
                 if grid_state["deleted_rows"]:
@@ -826,13 +750,9 @@ with tab_bulk_parser:
                     
                     for _, row in st.session_state["bulk_staging_dataframe"].iterrows():
                         try:
-                            existing_check = supabase.table("properties")\
-                                .select("id").eq("url", row["url"]).eq("is_current", True).execute()
-                            
+                            existing_check = supabase.table("properties").select("id").eq("url", row["url"]).eq("is_current", True).execute()
                             if existing_check.data:
-                                supabase.table("properties")\
-                                    .update({"is_current": False, "valid_to": now_iso})\
-                                    .eq("id", existing_check.data[0]["id"]).execute()
+                                supabase.table("properties").update({"is_current": False, "valid_to": now_iso}).eq("id", existing_check.data[0]["id"]).execute()
                             
                             lat, lon = get_coordinates(row["address"])
                             
@@ -847,8 +767,7 @@ with tab_bulk_parser:
                             }
                             supabase.table("properties").insert(payload).execute()
                             success_write_count += 1
-                        except Exception as write_err:
-                            st.error(f"Failed to log entry row {row['title'][:20]}: {write_err}")
+                        except Exception as e: st.error(f"Failed to log entry row {row['title'][:20]}: {e}")
                             
                     st.success(f"Successfully integrated **{success_write_count}** entries into your portfolio!")
                     del st.session_state["bulk_staging_dataframe"]
