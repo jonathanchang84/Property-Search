@@ -9,6 +9,7 @@ from supabase import create_client
 import pandas as pd
 import time
 import folium
+from folium.plugins import MarkerCluster
 import re
 from streamlit_folium import st_folium
 from datetime import datetime
@@ -81,9 +82,6 @@ def clean_floor_value(floor_str: str) -> str:
 
 # HELPER: Specific Map Tag Address Extractor
 def extract_address_from_map_tag(soup: BeautifulSoup) -> str:
-    """
-    Targets the unique map anchor tag to reliably extract the address string.
-    """
     map_anchor = soup.find("a", href=lambda href: href and "#map" in href)
     if map_anchor and map_anchor.get_text(strip=True):
         return map_anchor.get_text(strip=True)
@@ -98,10 +96,6 @@ def extract_address_from_map_tag(soup: BeautifulSoup) -> str:
 
 # HELPER: Integrity, Availability, and Revival Scanner Engine
 def check_property_availability(url: str) -> str:
-    """
-    Scans a property page for explicit signs of listing expiration.
-    Returns "No Longer Available" if the deactivation banner is found, otherwise "Active".
-    """
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -115,12 +109,10 @@ def check_property_availability(url: str) -> str:
             
         soup = BeautifulSoup(response.text, "html.parser")
         
-        # Strategy A: Target specific deactivation banner signature
         target_span = soup.find("span", class_=lambda c: c and "css-5ujp2z" in c and "etuedte2" in c)
         if target_span and "To ogłoszenie jest już niedostępne" in target_span.get_text():
             return "No Longer Available"
             
-        # Strategy B: String literal presence backup check
         if "To ogłoszenie jest już niedostępne" in response.text:
             return "No Longer Available"
             
@@ -555,7 +547,9 @@ with tab_map_view:
 
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
-    marker_group = folium.FeatureGroup(name="Properties")
+    
+    # ISSUE 2 FIX: Integrated MarkerCluster to aggregate and expand overlapping address instances
+    marker_cluster = MarkerCluster(options={"spiderfyOnMaxZoom": True, "showCoverageOnHover": False, "zoomToBoundsOnClick": True}).add_to(folium_explorer_map)
     saved_pins_count = 0
     
     if not df_filtered.empty and "latitude" in df_filtered.columns and "longitude" in df_filtered.columns:
@@ -565,7 +559,6 @@ with tab_map_view:
                 lat_coord = float(row['latitude'])
                 lon_coord = float(row['longitude'])
                 
-                # ENHANCED: Transformed title into an interactive clickable anchor link targeting tab context
                 html_popup_markup = f"""
                 <div style='font-family: Arial, sans-serif; min-width: 250px;'>
                     <h4 style='margin:0 0 5px 0;'>
@@ -585,11 +578,11 @@ with tab_map_view:
                 if row['status'] in ["No Longer Available", "No Longer Interested"]: marker_color = "gray"
                 elif row.get('rating', 5) >= 8: marker_color = "red"
 
-                folium.Marker(location=[lat_coord, lon_coord], popup=folium.Popup(html_popup_markup, max_width=350), icon=folium.Icon(color=marker_color, icon="home")).add_to(marker_group)
+                # Attached markers directly into cluster array frame
+                folium.Marker(location=[lat_coord, lon_coord], popup=folium.Popup(html_popup_markup, max_width=350), icon=folium.Icon(color=marker_color, icon="home")).add_to(marker_cluster)
                 saved_pins_count += 1
             except Exception: continue
 
-    marker_group.add_to(folium_explorer_map)
     st_folium(folium_explorer_map, use_container_width=True, height=450, key=f"map_workbench_pins_{saved_pins_count}")
 
     if not df_current.empty:
@@ -631,12 +624,11 @@ with tab_map_view:
 
         with grid_layout:
             st.markdown("### 📊 Active Filtered Records Index")
-            # ENHANCED: Included "url" directly inside the structural ordered pipeline frame grid arrays
             ordered_columns = ["id", "ranking", "rating", "title", "url", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"]
             df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
             df_display = df_display_source[ordered_columns].copy().sort_values(by=["ranking", "rating"], ascending=[False, False])
 
-            # ENHANCED CONFIGURATION BLOCK FOR MAIN DATA GRID (Added interactive browser-launching LinkColumn)
+            # ISSUE 1 FIX: Changed "address" column parameter block from disabled=True to disabled=False
             st.data_editor(
                 df_display,
                 column_config={
@@ -645,7 +637,7 @@ with tab_map_view:
                     "rating": st.column_config.NumberColumn("Rating"), 
                     "title": st.column_config.TextColumn("Title", disabled=True),
                     "url": st.column_config.LinkColumn("Listing URL", display_text="Open Listing 🔗", disabled=True),
-                    "address": st.column_config.TextColumn("Address", disabled=True), 
+                    "address": st.column_config.TextColumn("Address", disabled=False), 
                     "area": st.column_config.TextColumn("Area", disabled=True),
                     "status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
                     "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
@@ -659,8 +651,18 @@ with tab_map_view:
 
             if st.session_state.get("map_tab_aligned_data_grid") and st.session_state["map_tab_aligned_data_grid"]["edited_rows"]:
                 for row_idx_str, updated_fields in st.session_state["map_tab_aligned_data_grid"]["edited_rows"].items():
-                    record_id = df_display.iloc[int(row_idx_str)]["id"]
-                    if record_id: supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
+                    row_index_num = int(row_idx_str)
+                    record_id = df_display.iloc[row_index_num]["id"]
+                    
+                    # Intercept address mutations to recalculate mapping coordinates
+                    if "address" in updated_fields:
+                        new_addr_string = updated_fields["address"]
+                        new_lat, new_lon = get_coordinates(new_addr_string)
+                        updated_fields["latitude"] = new_lat
+                        updated_fields["longitude"] = new_lon
+                        
+                    if record_id: 
+                        supabase.table("properties").update(updated_fields).eq("id", record_id).execute()
                 st.rerun()
 
 # =========================================================================
