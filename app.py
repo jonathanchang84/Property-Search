@@ -328,9 +328,16 @@ with tab_scraped:
     with col1:
         st.subheader("Step 1: Parse Listing URL")
         default_url = "https://www.otodom.pl/pl/oferta/okazja-3-pokoje-2-balkony-krzyki-ID4AN0H"
-        target_url = st.text_input("Property URL Link:", value=default_url, key="input_target_url")
         
-        if st.button("Analyze with Intelligent Parsing", key="btn_run_scraper"):
+        # TOOLTIP ADDED HERE
+        target_url = st.text_input(
+            "Property URL Link:", 
+            value=default_url, 
+            key="input_target_url",
+            help="Paste a direct Otodom property listing link. The parser will extract metadata tags and verify street coordinates."
+        )
+        
+        if st.button("Analyze with Intelligent Parsing", key="btn_run_scraper", help="Triggers raw HTML layout extraction and parses content using Gemini models."):
             if target_url:
                 with st.spinner("Scanning webpage metadata elements with AI..."):
                     extracted, is_banner_found = intelligent_scraper(target_url)
@@ -369,8 +376,23 @@ with tab_scraped:
             st.subheader("Step 2: Self-Input & Data Enrichment")
             
             st.text_input("Listing Title (Read-Only):", value=cache["title"], disabled=True, key="field_title")
-            price_input = st.number_input("Base Property Price (zł):", min_value=0.0, value=float(cache["price"]), step=5000.0, format="%.2f", key="field_price_numeric")
-            user_edited_address = st.text_input("Property Address (Editable):", value=cache["address"], key="field_address_editable")
+            
+            # TOOLTIPS ADDED TO USER INPUTS BELOW
+            price_input = st.number_input(
+                "Base Property Price (zł):", 
+                min_value=0.0, 
+                value=float(cache["price"]), 
+                step=5000.0, 
+                format="%.2f", 
+                key="field_price_numeric",
+                help="The listing purchase price extracted from the page. You can adjust this to match negotiation targets."
+            )
+            user_edited_address = st.text_input(
+                "Property Address (Editable):", 
+                value=cache["address"], 
+                key="field_address_editable",
+                help="Used to generate map pins. If geocoding fails, simplify this text to just street and city name (e.g., 'ul. Popowicka, Wrocław')."
+            )
             
             if user_edited_address != cache["address"]:
                 new_lat, new_lon = get_coordinates(user_edited_address)
@@ -392,17 +414,17 @@ with tab_scraped:
             
             st.markdown("### 💰 Additional Transaction Outlays (Numeric Polish Złoty)")
             cost_col1, cost_col2 = st.columns(2)
-            with cost_col1: garage_input = st.number_input("Additional Cost - Garage (zł):", min_value=0.0, value=0.0, step=1000.0, format="%.2f", key="field_garage_numeric")
-            with cost_col2: storage_input = st.number_input("Additional Cost - Storage (zł):", min_value=0.0, value=0.0, step=500.0, format="%.2f", key="field_storage_numeric")
+            with cost_col1: garage_input = st.number_input("Additional Cost - Garage (zł):", min_value=0.0, value=0.0, step=1000.0, format="%.2f", key="field_garage_numeric", help="Optional purchasing overhead for garage spaces. This is added directly to Total Budget Outlay calculation metrics.")
+            with cost_col2: storage_input = st.number_input("Additional Cost - Storage (zł):", min_value=0.0, value=0.0, step=500.0, format="%.2f", key="field_storage_numeric", help="Optional purchasing cost for auxiliary basements or storage lockers.")
 
             st.markdown("### Your Custom Input Evaluation Metrics")
             user_notes = st.text_area("Your Comments Field (Personal Evaluation Notes):", placeholder="e.g., Close to Popowicki Park, great layout.", key="field_notes")
-            user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating")
+            user_rating = st.slider("Your Personal Property Rating (Out of 10):", min_value=1, max_value=10, value=5, key="field_rating", help="Custom personal preference ranking multiplier score.")
             
             status_index = STATUS_OPTIONS.index(cache["status"]) if cache["status"] in STATUS_OPTIONS else 0
-            current_status = st.selectbox("Pipeline Track Status:", STATUS_OPTIONS, index=status_index, key="field_status")
+            current_status = st.selectbox("Pipeline Track Status:", STATUS_OPTIONS, index=status_index, key="field_status", help="Categorize where this listing sits inside your assessment timeline.")
             
-            if st.button("Commit This Record Version to Database", key="btn_commit_db"):
+            if st.button("Commit This Record Version to Database", key="btn_commit_db", help="Saves this entry directly to Supabase. If an entry with this URL already exists, it marks the old row historical and instantiates this as current."):
                 now_iso = datetime.utcnow().isoformat() + "Z"
                 try:
                     existing_check = supabase.table("properties").select("id").eq("url", cache["url"]).eq("is_current", True).execute()
@@ -449,7 +471,7 @@ with tab_map_view:
         st.markdown("#### Automated Integrity & Revival Console")
         st.caption("Pings all database tracking records to update expired links or automatically resurrect properties that came back on the market.")
         
-        if st.button("🚀 Scan Portfolio Tracking for Status Changes", key="btn_run_integrity_check"):
+        if st.button("🚀 Scan Portfolio Tracking for Status Changes", key="btn_run_integrity_check", help="Loops over every active row in Supabase and pings the source URL. Automatically moves dead links to 'No Longer Available' or revives listings if they come back online."):
             if not df_current.empty:
                 scan_progress_bar = st.progress(0)
                 scan_status_text = st.empty()
@@ -517,13 +539,14 @@ with tab_map_view:
         
         df_filtered = df_current.copy()
 
+        # FILTER COMPONENT TOOLTIPS
         with filter_col1:
-            status_filter = st.multiselect("Filter by Status:", options=STATUS_OPTIONS, default=STATUS_OPTIONS)
+            status_filter = st.multiselect("Filter by Status:", options=STATUS_OPTIONS, default=STATUS_OPTIONS, help="Filter out archived or sold listings from the visualization deck.")
             if status_filter: df_filtered = df_filtered[df_filtered["status"].isin(status_filter)]
             else: df_filtered = pd.DataFrame(columns=df_current.columns)
                 
         with filter_col2:
-            text_search = st.text_input("Filter by Text Match:", placeholder="e.g. Krzyki or Popowicka")
+            text_search = st.text_input("Filter by Text Match:", placeholder="e.g. Krzyki or Popowicka", help="Filters the view index dynamically using string matches across Title, Address, and Custom Comments fields.")
             if text_search and not df_filtered.empty:
                 search_lower = text_search.lower()
                 df_filtered = df_filtered[df_filtered["title"].str.lower().str.contains(search_lower) | df_filtered["address"].str.lower().str.contains(search_lower) | df_filtered["my_notes"].str.lower().str.contains(search_lower)]
@@ -532,24 +555,23 @@ with tab_map_view:
             min_p = float(df_current["Total Cost"].min()) if not df_current.empty else 0.0
             max_p = float(df_current["Total Cost"].max()) if not df_current.empty else 1500000.0
             if max_p <= min_p: max_p = min_p + 1000.0
-            budget_range = st.slider("Filter by Budget (zł):", min_value=min_p, max_value=max_p, value=(min_p, max_p), step=10000.0, format="%d zł")
+            budget_range = st.slider("Filter by Budget (zł):", min_value=min_p, max_value=max_p, value=(min_p, max_p), step=10000.0, format="%d zł", help="Filters by base price combined with supplementary garage and storage outlays.")
             if not df_filtered.empty: df_filtered = df_filtered[(df_filtered["Total Cost"] >= budget_range[0]) & (df_filtered["Total Cost"] <= budget_range[1])]
 
         with filter_col4:
             min_r = int(df_current["ranking"].min()) if not df_current.empty else 0
             max_r = int(df_current["ranking"].max()) if not df_current.empty else 100
             if max_r <= min_r: max_r = min_r + 1
-            ranking_range = st.slider("Filter by Ranking:", min_value=min_r, max_value=max_r, value=(min_r, max_r), step=1)
+            ranking_range = st.slider("Filter by Ranking:", min_value=min_r, max_value=max_r, value=(min_r, max_r), step=1, help="Filter by your internal priority index score hierarchy.")
             if not df_filtered.empty: df_filtered = df_filtered[(df_filtered["ranking"] >= ranking_range[0]) & (df_filtered["ranking"] <= ranking_range[1])]
 
         with filter_col5:
-            rating_range = st.slider("Filter by Rating (1-10):", min_value=1, max_value=10, value=(1, 10), step=1)
+            rating_range = st.slider("Filter by Rating (1-10):", min_value=1, max_value=10, value=(1, 10), step=1, help="Filter properties by your slider evaluation score.")
             if not df_filtered.empty: df_filtered = df_filtered[(df_filtered["rating"] >= rating_range[0]) & (df_filtered["rating"] <= rating_range[1])]
 
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
     
-    # OVERLAPPING PIN RESOLUTION: Markers cluster automatically and spiderfy when clicked
     marker_cluster = MarkerCluster(options={"spiderfyOnMaxZoom": True, "showCoverageOnHover": False, "zoomToBoundsOnClick": True}).add_to(folium_explorer_map)
     saved_pins_count = 0
     
@@ -583,7 +605,6 @@ with tab_map_view:
                 saved_pins_count += 1
             except Exception: continue
 
-    # CANVAS KEY STABILIZATION FIX: Using a static string key instead of a changing pin-count metric
     st_folium(folium_explorer_map, use_container_width=True, height=450, key="portfolio_explorer_map_canvas")
 
     if not df_current.empty:
@@ -593,19 +614,19 @@ with tab_map_view:
         with edit_layout:
             st.markdown("### ✏️ Quick Pop-Up Editor")
             edit_target_options = df_filtered["title"].unique() if not df_filtered.empty else df_current["title"].unique()
-            selected_title = st.selectbox("Select a Property to Edit Inline:", options=edit_target_options, key="map_editor_picker")
+            selected_title = st.selectbox("Select a Property to Edit Inline:", options=edit_target_options, key="map_editor_picker", help="Pick any tracked listing item to reveal explicit configuration overrides directly below.")
             
             if selected_title:
                 selected_row = df_current[df_current["title"] == selected_title].iloc[0]
                 with st.expander(f"Modifier Panel: {selected_title[:30]}...", expanded=True):
-                    edit_address = st.text_input("Property Address:", value=str(selected_row["address"]))
+                    edit_address = st.text_input("Property Address:", value=str(selected_row["address"]), help="Modifying this text string runs background geocoding to calculate new coordinate pairs.")
                     edit_ranking = st.number_input("Portfolio Ranking Metric:", min_value=0, max_value=1000, value=int(selected_row.get("ranking", 0)))
                     edit_rating = st.slider("Property Rating Metric (1-10):", min_value=1, max_value=10, value=int(selected_row.get("rating", 5)))
                     edit_status = st.selectbox("Status:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(selected_row["status"]))
                     edit_price = st.number_input("Base Price (zł):", min_value=0.0, value=float(selected_row["price"]))
                     edit_notes = st.text_area("My Notes:", value=str(selected_row["my_notes"]))
                     
-                    if st.button("Save Changes Directly to Record", key="btn_save_inline_map"):
+                    if st.button("Save Changes Directly to Record", key="btn_save_inline_map", help="Pushes field changes into your permanent table structure and forces an immediate page re-render."):
                         try:
                             if edit_address != selected_row["address"]:
                                 with st.spinner("Resolving coordinates for new address input..."): new_lat, new_lon = get_coordinates(edit_address)
@@ -625,20 +646,29 @@ with tab_map_view:
 
         with grid_layout:
             st.markdown("### 📊 Active Filtered Records Index")
-            ordered_columns = ["id", "ranking", "rating", "title", "url", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"]
+            
+            # --- MAP PIN MATCH IDENTIFIER ENGINE INTEGRATED HERE ---
+            df_filtered["Mapped"] = df_filtered.apply(
+                lambda r: "🟢 Yes" if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")) else "🔴 No", 
+                axis=1
+            )
+            
+            # Appending 'Mapped' identifier header to structured ordered columns array
+            ordered_columns = ["id", "Mapped", "ranking", "rating", "title", "url", "address", "area", "floor", "floors", "year_built", "status", "price", "Cost per m²", "garage_cost", "storage_cost", "Total Cost", "my_notes"]
             df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
             df_display = df_display_source[ordered_columns].copy().sort_values(by=["ranking", "rating"], ascending=[False, False])
 
-            # EDITABLE ADDRESS FIELD BLOCK: disabled=False lets you change addresses inline
+            # RENDER THE DATA EDITOR INDEX
             st.data_editor(
                 df_display,
                 column_config={
                     "id": None, 
-                    "ranking": st.column_config.NumberColumn("Ranking"),
+                    "Mapped": st.column_config.TextColumn("On Map?", disabled=True, help="Shows if the listing contains valid latitude/longitude coordinate rows inside your database."), 
+                    "ranking": st.column_config.NumberColumn("Ranking", help="Double-click to inline edit ranking score assignments."),
                     "rating": st.column_config.NumberColumn("Rating"), 
                     "title": st.column_config.TextColumn("Title", disabled=True),
                     "url": st.column_config.LinkColumn("Listing URL", display_text="Open Listing 🔗", disabled=True),
-                    "address": st.column_config.TextColumn("Address", disabled=False), 
+                    "address": st.column_config.TextColumn("Address", disabled=False, help="Double-click to alter an unresolvable address text string. Hit Enter to execute instant geocoding background runs."), 
                     "area": st.column_config.TextColumn("Area", disabled=True),
                     "status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS),
                     "price": st.column_config.NumberColumn("Base Price", format="%.2f zł"),
@@ -655,7 +685,6 @@ with tab_map_view:
                     row_index_num = int(row_idx_str)
                     record_id = df_display.iloc[row_index_num]["id"]
                     
-                    # Run background geocoder when grid mutations affect address text string
                     if "address" in updated_fields:
                         new_addr_string = updated_fields["address"]
                         new_lat, new_lon = get_coordinates(new_addr_string)
@@ -677,7 +706,12 @@ with tab_bulk_parser:
     target_url_list = []
     
     with input_col1:
-        csv_file_handler = st.file_uploader("Option A: Choose CSV File Input Source", type=["csv"], key="bulk_csv_file_uploader")
+        csv_file_handler = st.file_uploader(
+            "Option A: Choose CSV File Input Source", 
+            type=["csv"], 
+            key="bulk_csv_file_uploader",
+            help="Upload a standard comma-separated text file. The system checks for an explicit structural header column named exactly 'url'."
+        )
         if csv_file_handler:
             try:
                 input_dataframe = pd.read_csv(csv_file_handler)
@@ -686,7 +720,12 @@ with tab_bulk_parser:
             except Exception as e: st.error(f"Error reading CSV: {e}")
                 
     with input_col2:
-        text_area_input = st.text_area("Option B: Paste Multiple URLs Directly", placeholder="Paste raw links here.\nSeparate multiple items using commas or individual line breaks.", key="bulk_text_area_urls")
+        text_area_input = st.text_area(
+            "Option B: Paste Multiple URLs Directly", 
+            placeholder="Paste raw links here.\nSeparate multiple items using commas or individual line breaks.", 
+            key="bulk_text_area_urls",
+            help="Paste one or multiple listing URLs. You can paste them separated by single spacing breaks or comma arrays."
+        )
         if text_area_input.strip():
             extracted_links = re.split(r'[\s,]+', text_area_input)
             valid_links = [lnk.strip() for lnk in extracted_links if "otodom.pl" in lnk.lower() and lnk.strip()]
@@ -697,7 +736,7 @@ with tab_bulk_parser:
     if target_url_list:
         st.info(f"📋 Loaded **{len(target_url_list)}** unique link contexts to parse across combined ingestion methods.")
         
-        if st.button("Execute Non-AI Bulk Parsing Execution", key="btn_run_bulk_processing"):
+        if st.button("Execute Non-AI Bulk Parsing Execution", key="btn_run_bulk_processing", help="Pings the targeted URLs concurrently via NextData JSON payload extraction endpoints to parse attributes without hitting Gemini API token rates."):
             staged_results_accumulator = []
             processing_progress_bar = st.progress(0)
             status_message_placeholder = st.empty()
@@ -755,7 +794,7 @@ with tab_bulk_parser:
                 use_container_width=True, hide_index=False, num_rows="dynamic", key="bulk_staging_active_grid"
             )
             form_col1, form_col2 = st.columns([1, 4])
-            with form_col1: apply_changes = st.form_submit_button("💾 Apply Grid Modifications")
+            with form_col1: apply_changes = st.form_submit_button("💾 Apply Grid Modifications", help="Applies temporary structural adjustments or address data text sanitization overrides inside local cache storage.")
 
         if apply_changes:
             grid_state = st.session_state.get("bulk_staging_active_grid")
@@ -782,7 +821,7 @@ with tab_bulk_parser:
 
         commit_col1, commit_col2 = st.columns([1, 4])
         with commit_col1:
-            if st.button("🚀 Commit All to Database", key="btn_commit_bulk_to_supabase_fleet"):
+            if st.button("🚀 Commit All to Database", key="btn_commit_bulk_to_supabase_fleet", help="Loops through the staging layout, triggers address coordinate matching, and inserts all entries into Supabase."):
                 with st.spinner("Resolving geo map matches and writing to database table..."):
                     now_iso = datetime.utcnow().isoformat() + "Z"
                     success_write_count = 0
@@ -814,6 +853,6 @@ with tab_bulk_parser:
                     st.rerun()
                     
         with commit_col2:
-            if st.button("🗑️ Clear Staging Table", key="btn_clear_bulk_staging"):
+            if st.button("🗑️ Clear Staging Table", key="btn_clear_bulk_staging", help="Flushes the current bulk processing layout from memory cache."):
                 del st.session_state["bulk_staging_dataframe"]
                 st.rerun()
