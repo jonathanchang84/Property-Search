@@ -315,7 +315,7 @@ STATUS_OPTIONS = ["Interested", "Viewing Arranged", "Offer Submitted", "No Longe
 
 # --- STREAMLIT PAGE SETUP ---
 st.set_page_config(layout="wide", page_title="Property Evaluation Hub")
-st.title("🏡 Property Hub Tracker Workspace")
+st.title("🏡 JChang Vibe Coding Projects")
 
 tab_scraped, tab_map_view, tab_bulk_parser = st.tabs(["📊 Parser & Evaluator", "🗺️ Portfolio Map Explorer", "📥 Bulk Parser"])
 
@@ -432,7 +432,8 @@ with tab_scraped:
 # =========================================================================
 with tab_map_view:
     try:
-        db_query_map = supabase.table("properties").select("*").execute()
+        # EXPANDED CAPPING FIX: Requesting up to 1000 properties to prevent default page truncation
+        db_query_map = supabase.table("properties").select("*").limit(1000).execute()
         map_properties = db_query_map.data
     except Exception as e:
         st.error(f"Failed to fetch maps pipeline data: {e}")
@@ -548,7 +549,7 @@ with tab_map_view:
     wroclaw_center_view = [51.1079, 17.0385]
     folium_explorer_map = folium.Map(location=wroclaw_center_view, zoom_start=12, control_scale=True)
     
-    # ISSUE 2 FIX: Integrated MarkerCluster to aggregate and expand overlapping address instances
+    # OVERLAPPING PIN RESOLUTION: Markers cluster automatically and spiderfy when clicked
     marker_cluster = MarkerCluster(options={"spiderfyOnMaxZoom": True, "showCoverageOnHover": False, "zoomToBoundsOnClick": True}).add_to(folium_explorer_map)
     saved_pins_count = 0
     
@@ -578,12 +579,12 @@ with tab_map_view:
                 if row['status'] in ["No Longer Available", "No Longer Interested"]: marker_color = "gray"
                 elif row.get('rating', 5) >= 8: marker_color = "red"
 
-                # Attached markers directly into cluster array frame
                 folium.Marker(location=[lat_coord, lon_coord], popup=folium.Popup(html_popup_markup, max_width=350), icon=folium.Icon(color=marker_color, icon="home")).add_to(marker_cluster)
                 saved_pins_count += 1
             except Exception: continue
 
-    st_folium(folium_explorer_map, use_container_width=True, height=450, key=f"map_workbench_pins_{saved_pins_count}")
+    # CANVAS KEY STABILIZATION FIX: Using a static string key instead of a changing pin-count metric
+    st_folium(folium_explorer_map, use_container_width=True, height=450, key="portfolio_explorer_map_canvas")
 
     if not df_current.empty:
         st.markdown("---")
@@ -628,7 +629,7 @@ with tab_map_view:
             df_display_source = df_filtered if not df_filtered.empty else pd.DataFrame(columns=ordered_columns)
             df_display = df_display_source[ordered_columns].copy().sort_values(by=["ranking", "rating"], ascending=[False, False])
 
-            # ISSUE 1 FIX: Changed "address" column parameter block from disabled=True to disabled=False
+            # EDITABLE ADDRESS FIELD BLOCK: disabled=False lets you change addresses inline
             st.data_editor(
                 df_display,
                 column_config={
@@ -654,7 +655,7 @@ with tab_map_view:
                     row_index_num = int(row_idx_str)
                     record_id = df_display.iloc[row_index_num]["id"]
                     
-                    # Intercept address mutations to recalculate mapping coordinates
+                    # Run background geocoder when grid mutations affect address text string
                     if "address" in updated_fields:
                         new_addr_string = updated_fields["address"]
                         new_lat, new_lon = get_coordinates(new_addr_string)
